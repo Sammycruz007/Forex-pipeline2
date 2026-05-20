@@ -1,0 +1,15 @@
+artifact_uri: /workspaces/Forex-pipeline2/mlruns/799868673876771119/5c930798012845368b477d82348d462c/artifacts
+end_time: 1779252314824
+entry_point_name: ''
+experiment_id: '799868673876771119'
+lifecycle_stage: active
+run_id: 5c930798012845368b477d82348d462c
+run_name: lightgbm_optuna
+run_uuid: 5c930798012845368b477d82348d462c
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1779252308968
+status: 3
+tags: []
+user_id: codespace

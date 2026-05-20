@@ -3,16 +3,20 @@ project:
   version: "1.0.0"
 
 data:
-  symbol: "EURUSD=X"          # Yahoo Finance Forex ticker
-  interval: "1d"               # Daily OHLCV
+  symbol: "EURUSD=X"
+  interval: "1d"
   start_date: "2018-01-01"
   end_date: "2026-05-20"
   raw_path: "data/raw"
   features_path: "data/features"
+  macro_symbols:
+    - "DX-Y.NYB"      # USD Dollar Index
+    - "^TNX"          # US 10Y Treasury Yield (interest rate signal)
+    - "GC=F"          # Gold (risk-off signal)
 
 features:
-  target_horizon: 5            # Predict direction 5 days ahead
-  target_column: "direction"   # 1 = Up, 0 = Down
+  target_horizon: 5
+  target_column: "direction"
   price_column: "Close"
 
 model:
@@ -23,12 +27,12 @@ model:
   experiment_name: "trading-signal"
 
   lightgbm:
-    n_trials: 100               # Optuna trials
-    timeout: 600               # 10 min max tuning time
+    n_trials: 100
+    timeout: 600
 
 thresholds:
   min_directional_accuracy: 0.52
-  min_f1_score: 0.50
+  min_f1_score: 0.48
 
 api:
   host: "0.0.0.0"

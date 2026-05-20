@@ -1,0 +1,15 @@
+artifact_uri: /workspaces/Forex-pipeline2/mlruns/799868673876771119/e24ff47c1c09436e8154cda237d23290/artifacts
+end_time: 1779252266520
+entry_point_name: ''
+experiment_id: '799868673876771119'
+lifecycle_stage: active
+run_id: e24ff47c1c09436e8154cda237d23290
+run_name: baseline_logistic_regression
+run_uuid: e24ff47c1c09436e8154cda237d23290
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1779252259423
+status: 3
+tags: []
+user_id: codespace

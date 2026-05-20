@@ -1,6 +1,6 @@
 """
 Feature Store Module
-Transforms raw OHLCV data into ML-ready feature matrix.
+Transforms raw OHLCV + macro data into ML-ready feature matrix.
 """
 
 import logging
@@ -103,22 +103,12 @@ def add_lag_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_regime_features(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Market regime features.
-    Helps model distinguish trending vs ranging,
-    and bull vs bear conditions.
-    """
-    close = df["Close"]
+    close        = df["Close"]
+    daily_return = close.pct_change()
 
-    # Price position relative to MAs
     df["above_sma20"] = (close > df["sma_20"]).astype(int)
     df["above_sma50"] = (close > df["sma_50"]).astype(int)
-
-    # Short MA above long MA = bullish regime
-    df["sma_cross"] = (df["sma_10"] > df["sma_20"]).astype(int)
-
-    # Consecutive up/down day streaks
-    daily_return = close.pct_change()
+    df["sma_cross"]   = (df["sma_10"] > df["sma_20"]).astype(int)
 
     df["up_streak"] = (
         daily_return.gt(0)
@@ -132,14 +122,68 @@ def add_regime_features(df: pd.DataFrame) -> pd.DataFrame:
         .cumcount() + 1
     ) * daily_return.lt(0)
 
-    # RSI regime flags
     df["rsi_oversold"]   = (df["rsi_14"] < 30).astype(int)
     df["rsi_overbought"] = (df["rsi_14"] > 70).astype(int)
-
-    # Volatility regime — is short-term vol above long-term vol?
-    df["vol_expanding"] = (df["volatility_10"] > df["volatility_20"]).astype(int)
+    df["vol_expanding"]  = (df["volatility_10"] > df["volatility_20"]).astype(int)
 
     logger.info("Regime features added")
+    return df
+
+
+def add_macro_features(
+    df: pd.DataFrame,
+    config: dict
+) -> pd.DataFrame:
+    """
+    Merge external macro signals into the feature matrix.
+    DXY  — USD strength (inverse to EURUSD by definition)
+    TNX  — US 10Y yield (rate differential drives FX)
+    Gold — risk-off sentiment proxy
+    All features are returns/changes — not raw levels.
+    Using returns prevents look-ahead bias and makes
+    features stationary (consistent statistical properties).
+    """
+    raw_path      = config["data"]["raw_path"]
+    macro_symbols = config["data"].get("macro_symbols", [])
+
+    macro_map = {
+        "DX-Y.NYB": "dxy",
+        "^TNX":     "tnx",
+        "GC=F":     "gold"
+    }
+
+    for symbol in macro_symbols:
+        short_name = macro_map.get(symbol, symbol.replace("=","").replace("^","").lower())
+        file_path  = f"{raw_path}/{symbol.replace('=','_').replace('^','')}_ohlcv.parquet"
+
+        try:
+            macro_df = pd.read_parquet(file_path, engine="pyarrow")
+
+            if isinstance(macro_df.columns, pd.MultiIndex):
+                macro_df.columns = macro_df.columns.get_level_values(0)
+
+            macro_close = macro_df["Close"].copy()
+
+            # Use returns not levels — stationary and no look-ahead bias
+            df[f"{short_name}_return_1d"] = macro_close.pct_change(1).reindex(df.index)
+            df[f"{short_name}_return_5d"] = macro_close.pct_change(5).reindex(df.index)
+
+            # Trend: is macro indicator above its 20-day MA?
+            macro_sma20 = macro_close.rolling(20).mean()
+            df[f"{short_name}_above_sma20"] = (
+                macro_close > macro_sma20
+            ).astype(int).reindex(df.index)
+
+            # Momentum: 10-day RSI of the macro indicator
+            df[f"{short_name}_rsi"] = ta.momentum.RSIIndicator(
+                macro_close, window=10
+            ).rsi().reindex(df.index)
+
+            logger.info(f"Macro features added: {short_name} (4 features)")
+
+        except FileNotFoundError:
+            logger.warning(f"Macro file not found for {symbol} — skipping")
+
     return df
 
 
@@ -169,12 +213,17 @@ def build_feature_store(config_path: str = "config.yaml") -> pd.DataFrame:
     df = pd.read_parquet(raw_file, engine="pyarrow")
     logger.info(f"Raw data shape: {df.shape}")
 
-    # Pipeline — order matters
+    # Technical features
     df = add_trend_features(df)
     df = add_momentum_features(df)
     df = add_volatility_features(df)
     df = add_lag_features(df)
-    df = add_regime_features(df)      # ← new
+    df = add_regime_features(df)
+
+    # Macro features — the new signal
+    df = add_macro_features(df, config)
+
+    # Target — always last
     df = add_target(df, horizon=horizon)
 
     before  = len(df)
@@ -184,8 +233,6 @@ def build_feature_store(config_path: str = "config.yaml") -> pd.DataFrame:
     logger.info(f"Final feature matrix shape: {df.shape}")
 
     if len(df) == 0:
-        nan_counts = df.isnull().sum()
-        logger.error(f"Empty DataFrame. NaN counts:\n{nan_counts[nan_counts > 0]}")
         raise ValueError("Feature store is empty after dropna.")
 
     Path(features_path).mkdir(parents=True, exist_ok=True)
