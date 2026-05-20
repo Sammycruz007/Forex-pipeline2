@@ -1,0 +1,33 @@
+# Data
+pandas>=2.2.0,<2.3.0
+numpy>=1.26.0,<2.0.0
+pyarrow>=14.0.0,<16.0.0
+
+# Forex data source
+yfinance>=0.2.40
+
+# Technical indicators
+ta>=0.11.0
+
+# ML
+scikit-learn>=1.5.0,<1.6.0
+lightgbm>=4.3.0,<4.4.0
+optuna>=3.6.0,<3.7.0
+
+# Experiment tracking
+mlflow>=2.13.0,<2.14.0
+
+# API
+fastapi>=0.111.0,<0.112.0
+uvicorn[standard]>=0.30.0,<0.31.0
+pydantic>=2.7.0,<2.8.0
+
+# Dashboard
+streamlit>=1.35.0,<1.36.0
+plotly>=5.22.0,<5.23.0
+
+# Utilities
+pyyaml>=6.0.1
+joblib>=1.4.0
+python-dotenv>=1.0.1
+requests>=2.32.0

@@ -1,0 +1,38 @@
+project:
+  name: trading-signal-pipeline
+  version: "1.0.0"
+
+data:
+  symbol: "EURUSD=X"          # Yahoo Finance Forex ticker
+  interval: "1d"               # Daily OHLCV
+  start_date: "2018-01-01"
+  end_date: "2024-12-31"
+  raw_path: "data/raw"
+  features_path: "data/features"
+
+features:
+  target_horizon: 5            # Predict direction 5 days ahead
+  target_column: "direction"   # 1 = Up, 0 = Down
+  price_column: "Close"
+
+model:
+  test_size: 0.2
+  val_size: 0.1
+  random_state: 42
+  model_path: "models"
+  experiment_name: "trading-signal"
+
+  lightgbm:
+    n_trials: 50               # Optuna trials
+    timeout: 600               # 10 min max tuning time
+
+thresholds:
+  min_directional_accuracy: 0.55
+  min_f1_score: 0.50
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+
+mlflow:
+  tracking_uri: "mlruns"
