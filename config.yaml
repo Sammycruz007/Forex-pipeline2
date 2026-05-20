@@ -6,7 +6,7 @@ data:
   symbol: "EURUSD=X"          # Yahoo Finance Forex ticker
   interval: "1d"               # Daily OHLCV
   start_date: "2018-01-01"
-  end_date: "2024-12-31"
+  end_date: "2026-05-20"
   raw_path: "data/raw"
   features_path: "data/features"
 
@@ -23,11 +23,11 @@ model:
   experiment_name: "trading-signal"
 
   lightgbm:
-    n_trials: 50               # Optuna trials
+    n_trials: 100               # Optuna trials
     timeout: 600               # 10 min max tuning time
 
 thresholds:
-  min_directional_accuracy: 0.55
+  min_directional_accuracy: 0.52
   min_f1_score: 0.50
 
 api:

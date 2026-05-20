@@ -1,3 +1,7 @@
+"""
+Feature Store Module
+Transforms raw OHLCV data into ML-ready feature matrix.
+"""
 
 import logging
 import yaml
@@ -5,11 +9,6 @@ import pandas as pd
 import numpy as np
 import ta
 from pathlib import Path
-
-"""
-Feature Store Module
-Transforms raw OHLCV data into ML-ready feature matrix.
-"""
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,7 +23,6 @@ def load_config(config_path: str = "config.yaml") -> dict:
 
 
 def add_trend_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Moving averages and trend indicators."""
     close = df["Close"]
     high  = df["High"]
     low   = df["Low"]
@@ -51,7 +49,6 @@ def add_trend_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_momentum_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Momentum and oscillator indicators."""
     close = df["Close"]
     high  = df["High"]
     low   = df["Low"]
@@ -71,7 +68,6 @@ def add_momentum_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_volatility_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Volatility indicators."""
     close = df["Close"]
     high  = df["High"]
     low   = df["Low"]
@@ -92,40 +88,65 @@ def add_volatility_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_lag_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Lag features and price-based proxies (replaces volume for Forex)."""
     close = df["Close"]
 
-    # Lagged returns
     for lag in [1, 2, 3, 5, 10]:
         df[f"return_lag_{lag}"] = close.pct_change(periods=lag)
 
-    # Daily range as % of close
-    df["hl_range"] = (df["High"] - df["Low"]) / df["Close"]
-
-    # Overnight gap
-    df["gap"] = (df["Open"] - df["Close"].shift(1)) / df["Close"].shift(1)
-
-    # Rolling volatility — std of returns over 10 days
-    # This replaces volume as a "market activity" proxy for Forex
+    df["hl_range"]      = (df["High"] - df["Low"]) / df["Close"]
+    df["gap"]           = (df["Open"] - df["Close"].shift(1)) / df["Close"].shift(1)
     df["volatility_10"] = close.pct_change().rolling(window=10).std()
-
-    # Rolling volatility over 20 days
     df["volatility_20"] = close.pct_change().rolling(window=20).std()
 
     logger.info("Lag + volatility proxy features added")
     return df
 
 
+def add_regime_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Market regime features.
+    Helps model distinguish trending vs ranging,
+    and bull vs bear conditions.
+    """
+    close = df["Close"]
+
+    # Price position relative to MAs
+    df["above_sma20"] = (close > df["sma_20"]).astype(int)
+    df["above_sma50"] = (close > df["sma_50"]).astype(int)
+
+    # Short MA above long MA = bullish regime
+    df["sma_cross"] = (df["sma_10"] > df["sma_20"]).astype(int)
+
+    # Consecutive up/down day streaks
+    daily_return = close.pct_change()
+
+    df["up_streak"] = (
+        daily_return.gt(0)
+        .groupby((daily_return.gt(0) != daily_return.gt(0).shift()).cumsum())
+        .cumcount() + 1
+    ) * daily_return.gt(0)
+
+    df["down_streak"] = (
+        daily_return.lt(0)
+        .groupby((daily_return.lt(0) != daily_return.lt(0).shift()).cumsum())
+        .cumcount() + 1
+    ) * daily_return.lt(0)
+
+    # RSI regime flags
+    df["rsi_oversold"]   = (df["rsi_14"] < 30).astype(int)
+    df["rsi_overbought"] = (df["rsi_14"] > 70).astype(int)
+
+    # Volatility regime — is short-term vol above long-term vol?
+    df["vol_expanding"] = (df["volatility_10"] > df["volatility_20"]).astype(int)
+
+    logger.info("Regime features added")
+    return df
+
+
 def add_target(df: pd.DataFrame, horizon: int = 5) -> pd.DataFrame:
-    """
-    Binary target: will price be higher in N days?
-    1 = Up, 0 = Down
-    Last N rows are dropped — no future data available for them.
-    """
     future_close        = df["Close"].shift(-horizon)
     df["target"]        = (future_close > df["Close"]).astype(int)
     df["future_return"] = (future_close - df["Close"]) / df["Close"]
-
     df = df.iloc[:-horizon]
 
     up_pct = df["target"].mean() * 100
@@ -137,42 +158,36 @@ def add_target(df: pd.DataFrame, horizon: int = 5) -> pd.DataFrame:
 
 
 def build_feature_store(config_path: str = "config.yaml") -> pd.DataFrame:
-    """Full feature engineering pipeline."""
     config        = load_config(config_path)
     symbol        = config["data"]["symbol"]
     horizon       = config["features"]["target_horizon"]
     raw_path      = config["data"]["raw_path"]
     features_path = config["data"]["features_path"]
 
-    # Load raw data
     raw_file = f"{raw_path}/{symbol.replace('=', '_')}_ohlcv.parquet"
     logger.info(f"Loading raw data from {raw_file}")
     df = pd.read_parquet(raw_file, engine="pyarrow")
     logger.info(f"Raw data shape: {df.shape}")
 
-    # Build features — order matters
+    # Pipeline — order matters
     df = add_trend_features(df)
     df = add_momentum_features(df)
     df = add_volatility_features(df)
     df = add_lag_features(df)
+    df = add_regime_features(df)      # ← new
     df = add_target(df, horizon=horizon)
 
-    # Drop NaN rows from indicator warmup periods
     before  = len(df)
     df      = df.dropna()
     dropped = before - len(df)
     logger.info(f"Dropped {dropped} NaN rows from indicator warmup")
     logger.info(f"Final feature matrix shape: {df.shape}")
 
-    # Sanity check
     if len(df) == 0:
-        # Debug: show which columns still have NaNs before dropna
         nan_counts = df.isnull().sum()
-        logger.error("DataFrame is empty after dropna. NaN counts per column:")
-        logger.error(nan_counts[nan_counts > 0].to_string())
-        raise ValueError("Feature store is empty. Check NaN debug output above.")
+        logger.error(f"Empty DataFrame. NaN counts:\n{nan_counts[nan_counts > 0]}")
+        raise ValueError("Feature store is empty after dropna.")
 
-    # Save
     Path(features_path).mkdir(parents=True, exist_ok=True)
     output_file = f"{features_path}/{symbol.replace('=', '_')}_features.parquet"
     df.to_parquet(output_file, index=True, engine="pyarrow")
@@ -183,12 +198,7 @@ def build_feature_store(config_path: str = "config.yaml") -> pd.DataFrame:
 
 if __name__ == "__main__":
     df = build_feature_store()
-
-    print("\n--- Feature Matrix Sample (last 3 rows) ---")
-    print(df.tail(3).T.to_string())
-
-    print(f"\n--- Summary ---")
-    print(f"Shape         : {df.shape}")
+    print(f"\nShape         : {df.shape}")
     print(f"Features      : {df.shape[1] - 2} (excl. target + future_return)")
     print(f"Date range    : {df.index[0].date()} → {df.index[-1].date()}")
     print(f"Target balance: {df['target'].value_counts().to_dict()}")
