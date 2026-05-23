@@ -1,3 +1,4 @@
+import os
 """
 Evaluation Module
 Standalone backtest used by both Airflow and GitHub Actions CI/CD.
@@ -173,7 +174,7 @@ def log_to_mlflow(
     config: dict
 ) -> None:
     """Log backtest results to MLflow for audit trail."""
-    mlflow.set_tracking_uri("mlruns")
+    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "./mlruns"))
     mlflow.set_experiment(config["model"]["experiment_name"])
 
     with mlflow.start_run(run_name=f"backtest_{model_name}"):

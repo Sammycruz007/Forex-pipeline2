@@ -1,3 +1,4 @@
+import os
 """
 Model Training Module
 Primary: Logistic Regression ensemble with tuned class weights
@@ -315,7 +316,7 @@ def check_quality_gate(metrics: Dict, config: dict, model_name: str) -> bool:
 
 def run_training(config_path: str = "config.yaml") -> Dict:
     config = load_config(config_path)
-    mlflow.set_tracking_uri("mlruns")
+    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "./mlruns"))
 
     df                               = load_features(config)
     X, y                             = prepare_data(df, config)
