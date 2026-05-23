@@ -173,7 +173,7 @@ def log_to_mlflow(
     config: dict
 ) -> None:
     """Log backtest results to MLflow for audit trail."""
-    mlflow.set_tracking_uri(config["mlflow"]["tracking_uri"])
+    mlflow.set_tracking_uri("mlruns")
     mlflow.set_experiment(config["model"]["experiment_name"])
 
     with mlflow.start_run(run_name=f"backtest_{model_name}"):

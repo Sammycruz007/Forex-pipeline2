@@ -315,7 +315,7 @@ def check_quality_gate(metrics: Dict, config: dict, model_name: str) -> bool:
 
 def run_training(config_path: str = "config.yaml") -> Dict:
     config = load_config(config_path)
-    mlflow.set_tracking_uri(config["mlflow"]["tracking_uri"])
+    mlflow.set_tracking_uri("mlruns")
 
     df                               = load_features(config)
     X, y                             = prepare_data(df, config)
