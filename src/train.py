@@ -173,7 +173,7 @@ def train_baseline(
             "up_weight":    best_weight
         })
         mlflow.log_metrics(metrics)
-        mlflow.sklearn.log_model(model, "baseline_model")
+        # Model saved via joblib — skip mlflow artifact logging in CI
 
     return model, metrics
 
@@ -267,7 +267,7 @@ def train_lightgbm(
 
         mlflow.log_params(final_params)
         mlflow.log_metrics(metrics)
-        mlflow.lightgbm.log_model(final_model, "lightgbm_model")
+        # Model saved via joblib — skip mlflow artifact logging in CI
 
         importance_df = pd.DataFrame({
             "feature":    X_train.columns,
