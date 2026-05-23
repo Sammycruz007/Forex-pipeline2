@@ -1,5 +1,6 @@
-mlruns/
-__pycache__/
+*.joblib
 *.pyc
 .pytest_cache/
-*.joblib
+__pycache__/
+mlruns/
+mlruns/*
