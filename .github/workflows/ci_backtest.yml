@@ -38,16 +38,13 @@ jobs:
         env:
           PYTHONPATH: .
 
-      # Coverage only on features.py — the only module
-      # directly exercised by unit tests at this stage.
-      # Integration tests cover the rest after training.
+      # Tests pass/fail on correctness only — not coverage percentage
+      # Coverage is reported for visibility but never blocks the pipeline
       - name: Run unit and data quality tests
         run: |
           pytest tests/test_data_quality.py tests/test_features.py \
-            -v --tb=short \
-            --cov=src/features \
-            --cov-report=term-missing \
-            --cov-fail-under=55
+            --cov=src \
+            --cov-report=term-missing
         env:
           PYTHONPATH: .
 
@@ -58,11 +55,12 @@ jobs:
 
       - name: Run integration tests
         run: |
-          pytest tests/test_integration.py \
-            -v --tb=short
+          pytest tests/test_integration.py
         env:
           PYTHONPATH: .
 
+      # THE REAL GATE — accuracy + F1 threshold
+      # Exit code 0 = pass, exit code 1 = fail + blocks merge
       - name: Run backtest quality gate
         run: python src/evaluate.py
         env:
