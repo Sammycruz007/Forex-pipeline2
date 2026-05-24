@@ -1,38 +1,40 @@
 """
 Prediction Module
 Loads trained model and generates trading signals.
+Uses raw OHLCV for inference to get the freshest possible signal.
 """
 
 import logging
 import joblib
 import yaml
+import sys
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict
+
+sys.path.insert(0, ".")
 
 logger = logging.getLogger(__name__)
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
     with open(config_path, "r") as f:
-        import yaml
         return yaml.safe_load(f)
 
 
 def load_model(config: dict):
     """Load the best model — LightGBM if available, else baseline."""
-    model_path = Path(config["model"]["model_path"])
-
+    model_path    = Path(config["model"]["model_path"])
     lgbm_path     = model_path / "lgbm_model.joblib"
     baseline_path = model_path / "baseline_model.joblib"
     cols_path     = model_path / "feature_cols.joblib"
 
     if lgbm_path.exists():
-        model = joblib.load(lgbm_path)
+        model      = joblib.load(lgbm_path)
         model_name = "LightGBM"
     elif baseline_path.exists():
-        model = joblib.load(baseline_path)
+        model      = joblib.load(baseline_path)
         model_name = "LogisticRegression"
     else:
         raise FileNotFoundError("No trained model found. Run src/train.py first.")
@@ -42,8 +44,47 @@ def load_model(config: dict):
     return model, feature_cols, model_name
 
 
+def load_inference_features(config: dict) -> pd.DataFrame:
+    """
+    Build features from raw OHLCV WITHOUT dropping the last 5 rows.
+    Training drops the last 5 rows because they have no future target.
+    For inference we don't need a target — we need the freshest features.
+    This gives us signals based on the most recent available close.
+    """
+    from src.features import (
+        add_trend_features,
+        add_momentum_features,
+        add_volatility_features,
+        add_lag_features,
+        add_regime_features,
+        add_macro_features,
+    )
+
+    symbol   = config["data"]["symbol"]
+    raw_path = config["data"]["raw_path"]
+
+    # Load raw OHLCV
+    raw_file = f"{raw_path}/{symbol.replace('=', '_')}_ohlcv.parquet"
+    df       = pd.read_parquet(raw_file, engine="pyarrow")
+
+    # Build all features — no target, no row dropping
+    df = add_trend_features(df)
+    df = add_momentum_features(df)
+    df = add_volatility_features(df)
+    df = add_lag_features(df)
+    df = add_regime_features(df)
+    df = add_macro_features(df, config)
+
+    # Drop only NaN warmup rows
+    df = df.dropna()
+
+    logger.info(f"Inference features built | Latest date: {df.index[-1].date()}")
+    logger.info(f"Shape: {df.shape}")
+    return df
+
+
 def load_latest_features(config: dict) -> pd.DataFrame:
-    """Load the feature store."""
+    """Load the training feature store (fallback)."""
     symbol        = config["data"]["symbol"]
     features_path = config["data"]["features_path"]
     path = f"{features_path}/{symbol.replace('=', '_')}_features.parquet"
@@ -54,26 +95,32 @@ def load_latest_features(config: dict) -> pd.DataFrame:
 def generate_signal(config_path: str = "config.yaml") -> Dict:
     """
     Generate trading signal for the next N days.
-    Returns direction, probability, and per-day forecasts.
+    Uses freshest available features for inference.
     """
-    config                       = load_config(config_path)
+    config                          = load_config(config_path)
     model, feature_cols, model_name = load_model(config)
-    df                           = load_latest_features(config)
 
-    # Use the most recent row as the current state
-    latest         = df[feature_cols].iloc[-1:]
-    latest_date    = df.index[-1]
-    current_price  = float(df["Close"].iloc[-1])
+    # Use inference features — freshest available data
+    try:
+        df = load_inference_features(config)
+    except Exception as e:
+        logger.warning(f"Inference features failed ({e}), falling back to feature store")
+        df = load_latest_features(config)
 
-    # Predict direction and probability
-    direction_pred = int(model.predict(latest)[0])
-    proba          = model.predict_proba(latest)[0]
-    up_probability = float(round(proba[1], 4))
-    dn_probability = float(round(proba[0], 4))
+    # Align to model's expected feature columns
+    valid_cols    = [c for c in feature_cols if c in df.columns]
+    latest        = df[valid_cols].iloc[-1:]
+    latest_date   = df.index[-1]
+    current_price = float(df["Close"].iloc[-1])
 
+    # Predict
+    direction_pred  = int(model.predict(latest)[0])
+    proba           = model.predict_proba(latest)[0]
+    up_probability  = float(round(proba[1], 4))
+    dn_probability  = float(round(proba[0], 4))
     direction_label = "UP" if direction_pred == 1 else "DOWN"
 
-    # Confidence level
+    # Confidence
     confidence = max(up_probability, dn_probability)
     if confidence >= 0.65:
         confidence_label = "HIGH"
@@ -82,16 +129,15 @@ def generate_signal(config_path: str = "config.yaml") -> Dict:
     else:
         confidence_label = "LOW"
 
-    # Generate 5-day forecast using rolling predictions
-    horizon       = config["features"]["target_horizon"]
-    daily_forecasts = []
-    feature_window  = df[feature_cols].copy()
+    # 5-day forecast
+    horizon          = config["features"]["target_horizon"]
+    feature_window   = df[valid_cols].copy()
+    daily_forecasts  = []
 
     for day in range(1, horizon + 1):
         row       = feature_window.iloc[-1:]
         day_pred  = int(model.predict(row)[0])
         day_proba = model.predict_proba(row)[0]
-
         daily_forecasts.append({
             "day":       day,
             "direction": "UP" if day_pred == 1 else "DOWN",
@@ -115,5 +161,9 @@ def generate_signal(config_path: str = "config.yaml") -> Dict:
 
 if __name__ == "__main__":
     import json
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(message)s"
+    )
     signal = generate_signal()
     print(json.dumps(signal, indent=2))

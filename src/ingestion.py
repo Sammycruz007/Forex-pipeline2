@@ -88,7 +88,8 @@ def run_ingestion(config_path: str = "config.yaml") -> pd.DataFrame:
     config     = load_config(config_path)
     symbol     = config["data"]["symbol"]
     start_date = config["data"]["start_date"]
-    end_date   = config["data"]["end_date"]
+    from datetime import date as _date
+    end_date   = str(_date.today())
     interval   = config["data"]["interval"]
     raw_path   = config["data"]["raw_path"]
 
