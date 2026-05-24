@@ -10,10 +10,6 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 
-# ─────────────────────────────────────────────
-# Config
-# ─────────────────────────────────────────────
-
 API_BASE = "http://localhost:8000"
 
 st.set_page_config(
@@ -76,12 +72,13 @@ def fetch_importance():
 # ─────────────────────────────────────────────
 
 def build_candlestick_chart(df: pd.DataFrame, signal: dict) -> go.Figure:
+    """Candlestick chart with a single weekly forecast zone."""
+
     fig = make_subplots(
         rows=1, cols=1,
-        subplot_titles=["EUR/USD — Daily Chart with 5-Day Forecast"]
+        subplot_titles=["EUR/USD — Daily Chart with Weekly Forecast"]
     )
 
-    # Candlestick
     fig.add_trace(go.Candlestick(
         x     = df.index,
         open  = df["open"],
@@ -93,15 +90,15 @@ def build_candlestick_chart(df: pd.DataFrame, signal: dict) -> go.Figure:
         decreasing_line_color = "#ff4444",
     ))
 
-    last_date  = df.index[-1]
-    last_price = df["close"].iloc[-1]
-    signal_dir = signal["signal"]
-    up_prob    = signal["up_probability"]
-    dn_prob    = signal["dn_probability"]
-    color      = "#00ff88" if signal_dir == "UP" else "#ff4444"
-    fill_color = "rgba(0,255,136,0.1)" if signal_dir == "UP" else "rgba(255,68,68,0.1)"
+    last_date    = df.index[-1]
+    last_price   = df["close"].iloc[-1]
+    signal_dir   = signal["signal"]
+    dn_prob      = signal["dn_probability"]
+    up_prob      = signal["up_probability"]
+    color        = "#00ff88" if signal_dir == "UP" else "#ff4444"
+    fill_color   = "rgba(0,255,136,0.1)" if signal_dir == "UP" else "rgba(255,68,68,0.1)"
 
-    # Forecast dates — skip weekends
+    # Generate 5 forecast dates skipping weekends
     forecast_dates = []
     current        = last_date
     while len(forecast_dates) < 5:
@@ -109,59 +106,70 @@ def build_candlestick_chart(df: pd.DataFrame, signal: dict) -> go.Figure:
         if current.weekday() < 5:
             forecast_dates.append(current)
 
-    # Forecast prices
-    forecasts     = signal["daily_forecasts"]
-    price_factor  = 1.0
-    forecast_prices = [last_price]
-    for f in forecasts:
-        if f["direction"] == "UP":
-            price_factor *= (1 + (f["up_prob"] - 0.5) * 0.005)
-        else:
-            price_factor *= (1 - (f["dn_prob"] - 0.5) * 0.005)
-        forecast_prices.append(last_price * price_factor)
+    end_date = forecast_dates[-1]
 
-    forecast_x = [last_date] + forecast_dates
+    # Single directional forecast line
+    pip_move    = last_price * 0.008
+    target_price = (
+        last_price + pip_move if signal_dir == "UP"
+        else last_price - pip_move
+    )
 
-    # Forecast line
     fig.add_trace(go.Scatter(
-        x      = forecast_x,
-        y      = forecast_prices,
+        x      = [last_date, end_date],
+        y      = [last_price, target_price],
         mode   = "lines+markers",
-        name   = f"Forecast ({signal_dir})",
+        name   = f"Weekly Forecast ({signal_dir})",
         line   = dict(color=color, width=2, dash="dash"),
         marker = dict(size=8, color=color),
     ))
 
-    # Confidence band — single fillcolor, no duplicate
-    upper = [p + last_price * 0.008 for p in forecast_prices]
-    lower = [p - last_price * 0.008 for p in forecast_prices]
-
+    # Forecast zone — shaded region for the week
+    spread = last_price * 0.006
     fig.add_trace(go.Scatter(
-        x          = forecast_x + forecast_x[::-1],
-        y          = upper + lower[::-1],
+        x          = [last_date, end_date, end_date, last_date],
+        y          = [
+            last_price + spread,
+            target_price + spread,
+            target_price - spread,
+            last_price - spread
+        ],
         fill       = "toself",
         fillcolor  = fill_color,
         line       = dict(color="rgba(255,255,255,0)"),
-        name       = "Confidence Band",
-        showlegend = False,
+        name       = "Forecast Zone",
+        showlegend = True,
     ))
 
-    # Annotation
+    # Vertical line marking forecast start
+    fig.add_vline(
+        x          = last_date,
+        line_dash  = "dot",
+        line_color = "#888888",
+        annotation_text = "Forecast Start",
+        annotation_font_color = "#888888"
+    )
+
+    # Annotation on the forecast
+    confidence = signal["confidence"]
+    prob       = max(up_prob, dn_prob)
     fig.add_annotation(
-        x           = forecast_dates[2],
-        y           = forecast_prices[-1],
-        text        = f"{'▲' if signal_dir == 'UP' else '▼'} {signal_dir} {max(up_prob, dn_prob)*100:.1f}%",
+        x           = end_date,
+        y           = target_price,
+        text        = f"{'▲' if signal_dir == 'UP' else '▼'} {signal_dir} {prob*100:.1f}% — {confidence}",
         showarrow   = True,
         arrowhead   = 2,
         arrowcolor  = color,
-        font        = dict(color=color, size=14),
+        font        = dict(color=color, size=13),
         bgcolor     = "#1c1c2e",
         bordercolor = color,
+        ax          = 40,
+        ay          = -40
     )
 
     fig.update_layout(
         template                  = "plotly_dark",
-        height                    = 520,
+        height                    = 540,
         showlegend                = True,
         xaxis_rangeslider_visible = False,
         paper_bgcolor             = "#0e1117",
@@ -178,18 +186,19 @@ def build_candlestick_chart(df: pd.DataFrame, signal: dict) -> go.Figure:
 
 
 def build_probability_gauge(up_prob: float, dn_prob: float) -> go.Figure:
+    """Gauge showing weekly directional probability."""
     fig = go.Figure(go.Indicator(
         mode  = "gauge+number+delta",
         value = up_prob * 100,
-        title = {"text": "UP Probability %", "font": {"color": "white"}},
+        title = {"text": "UP Probability % (Weekly)", "font": {"color": "white"}},
         delta = {"reference": 50, "valueformat": ".1f"},
         gauge = {
-            "axis"  : {"range": [0, 100], "tickcolor": "white"},
-            "bar"   : {"color": "#00ff88" if up_prob > 0.5 else "#ff4444"},
+            "axis"   : {"range": [0, 100], "tickcolor": "white"},
+            "bar"    : {"color": "#00ff88" if up_prob > 0.5 else "#ff4444"},
             "bgcolor": "#1c1c2e",
-            "steps" : [
-                {"range": [0,  40], "color": "#ff4444"},
-                {"range": [40, 60], "color": "#ffd700"},
+            "steps"  : [
+                {"range": [0,  40],  "color": "#ff4444"},
+                {"range": [40, 60],  "color": "#ffd700"},
                 {"range": [60, 100], "color": "#00ff88"},
             ],
             "threshold": {
@@ -201,42 +210,67 @@ def build_probability_gauge(up_prob: float, dn_prob: float) -> go.Figure:
     ))
     fig.update_layout(
         template      = "plotly_dark",
-        height        = 250,
+        height        = 280,
         paper_bgcolor = "#0e1117",
         font          = dict(color="white"),
-        margin        = dict(l=20, r=20, t=40, b=20)
+        margin        = dict(l=20, r=20, t=60, b=20)
     )
     return fig
 
 
-def build_forecast_bars(forecasts: list) -> go.Figure:
-    days     = [f"Day {f['day']}" for f in forecasts]
-    up_probs = [f["up_prob"] * 100 for f in forecasts]
-    colors   = ["#00ff88" if p > 50 else "#ff4444" for p in up_probs]
+def build_weekly_signal_card(signal: dict) -> go.Figure:
+    """
+    Single weekly signal summary bar.
+    Replaces the misleading 5-identical-bars chart.
+    Shows one honest probability bar for the week.
+    """
+    signal_dir = signal["signal"]
+    up_prob    = signal["up_probability"]
+    dn_prob    = signal["dn_probability"]
+    color_up   = "#00ff88"
+    color_dn   = "#ff4444"
 
     fig = go.Figure()
+
+    # UP probability bar
     fig.add_trace(go.Bar(
-        x            = days,
-        y            = up_probs,
-        name         = "UP Probability %",
-        marker_color = colors,
-        text         = [f"{p:.1f}%" for p in up_probs],
-        textposition = "outside"
+        x            = ["Week of May 26–30"],
+        y            = [up_prob * 100],
+        name         = "UP %",
+        marker_color = color_up,
+        text         = [f"UP: {up_prob*100:.1f}%"],
+        textposition = "inside",
+        width        = 0.3,
     ))
+
+    # DOWN probability bar
+    fig.add_trace(go.Bar(
+        x            = ["Week of May 26–30"],
+        y            = [dn_prob * 100],
+        name         = "DOWN %",
+        marker_color = color_dn,
+        text         = [f"DOWN: {dn_prob*100:.1f}%"],
+        textposition = "inside",
+        width        = 0.3,
+    ))
+
     fig.add_hline(
         y               = 50,
         line_dash       = "dash",
         line_color      = "white",
-        annotation_text = "50% (random)"
+        annotation_text = "50% — no edge"
     )
+
     fig.update_layout(
         template      = "plotly_dark",
-        title         = "5-Day Forecast — Daily UP Probability",
-        height        = 300,
+        title         = "Weekly Directional Probability — Single Signal",
+        barmode       = "group",
+        height        = 320,
         paper_bgcolor = "#0e1117",
         plot_bgcolor  = "#0e1117",
         font          = dict(color="white"),
-        yaxis         = dict(range=[0, 110]),
+        yaxis         = dict(range=[0, 100], title="Probability %"),
+        legend        = dict(bgcolor="#1c1c2e"),
         margin        = dict(l=10, r=10, t=40, b=10)
     )
     return fig
@@ -271,39 +305,46 @@ def build_importance_chart(features: list) -> go.Figure:
 # ─────────────────────────────────────────────
 
 def main():
-    # Header
     st.markdown("""
         <h1 style='text-align:center; color:white;'>
             📈 Forex ML Signal Dashboard
         </h1>
         <p style='text-align:center; color:#888;'>
-            EUR/USD · LightGBM + Macro Features · 5-Day Directional Forecast
+            EUR/USD · LightGBM + Macro Features · Weekly Directional Signal
         </p>
         <hr style='border-color:#2d2d44;'>
     """, unsafe_allow_html=True)
 
-    # Sidebar
     with st.sidebar:
         st.markdown("### ⚙️ Settings")
         chart_days = st.slider("Chart history (days)", 30, 365, 120)
         st.markdown("---")
         st.markdown("### 📊 Model Info")
         st.markdown("**Model:** LightGBM + Optuna")
-        st.markdown("**Features:** 52 (tech + macro)")
-        st.markdown("**Backtest Accuracy:** 63.26%")
-        st.markdown("**Test Period:** Sep 2024 – May 2026")
+        st.markdown("**Features:** 52 (technical + macro)")
+        st.markdown("**Backtest Accuracy:** 61.65%")
+        st.markdown("**Signal frequency:** Weekly (Monday)")
+        st.markdown("---")
+        st.markdown("### 📖 How To Use")
+        st.markdown(
+            "1. Check signal every **Monday morning**\n"
+            "2. **HIGH confidence** → trade with full size\n"
+            "3. **MEDIUM confidence** → wait for 1hr confirmation\n"
+            "4. **LOW confidence** → no trade\n"
+            "5. Use 15min/1hr chart for entry timing"
+        )
         st.markdown("---")
         st.markdown("### ⚠️ Disclaimer")
         st.markdown(
-            "_This is an ML research tool. "
+            "_ML research tool only. "
             "Not financial advice. "
-            "Always use proper risk management._"
+            "Always use risk management._"
         )
         if st.button("🔄 Refresh Data"):
             st.cache_data.clear()
             st.rerun()
 
-    # Fetch
+    # Fetch data
     signal     = fetch_signal()
     history_df = fetch_history(chart_days)
     importance = fetch_importance()
@@ -325,15 +366,19 @@ def main():
     st.markdown(f"""
     <div style='background:{color}22; border:2px solid {color};
                 border-radius:12px; padding:20px; text-align:center; margin-bottom:20px;'>
-        <span style='color:{color}; font-size:2.5em; font-weight:bold;'>
+        <span style='color:{color}; font-size:2.8em; font-weight:bold;'>
             {arrow} {signal_dir}
         </span>
         <span style='color:white; font-size:1.5em; margin-left:20px;'>
             {confidence} CONFIDENCE
         </span>
-        <br>
+        <br><br>
         <span style='color:#aaa; font-size:1em;'>
-            EUR/USD @ {price:.5f} · As of {as_of} · Next 5 trading days
+            EUR/USD @ {price:.5f} · Signal as of {as_of} · Valid for week of May 26–30
+        </span>
+        <br>
+        <span style='color:#666; font-size:0.85em;'>
+            ⓘ Single weekly signal — not 5 independent daily forecasts
         </span>
     </div>
     """, unsafe_allow_html=True)
@@ -341,15 +386,15 @@ def main():
     # Metrics row
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
-        st.metric("Current Price",  f"{price:.5f}")
+        st.metric("Price (May 22)",  f"{price:.5f}")
     with col2:
-        st.metric("Signal",         signal_dir)
+        st.metric("Weekly Signal",   signal_dir)
     with col3:
-        st.metric("UP Probability", f"{up_prob*100:.1f}%")
+        st.metric("UP Probability",  f"{up_prob*100:.1f}%")
     with col4:
-        st.metric("DN Probability", f"{dn_prob*100:.1f}%")
+        st.metric("DOWN Probability", f"{dn_prob*100:.1f}%")
     with col5:
-        st.metric("Confidence",     confidence)
+        st.metric("Confidence",      confidence)
 
     st.markdown("---")
 
@@ -359,7 +404,7 @@ def main():
         use_container_width=True
     )
 
-    # Gauge + forecast bars
+    # Gauge + weekly signal card
     col_left, col_right = st.columns([1, 2])
     with col_left:
         st.plotly_chart(
@@ -368,7 +413,7 @@ def main():
         )
     with col_right:
         st.plotly_chart(
-            build_forecast_bars(signal["daily_forecasts"]),
+            build_weekly_signal_card(signal),
             use_container_width=True
         )
 
@@ -396,7 +441,7 @@ def main():
     <p style='text-align:center; color:#555; font-size:0.8em;'>
         Last updated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} ·
         Model: {signal['model_used']} ·
-        Backtest accuracy: 63.26%
+        Accuracy: 61.65% · Signal frequency: Weekly
     </p>
     """, unsafe_allow_html=True)
 
