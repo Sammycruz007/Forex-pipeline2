@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: forex-signal-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile.api
+    plan: free
+    envVars:
+      - key: PYTHONPATH
+        value: .
+      - key: MLFLOW_TRACKING_URI
+        value: ./mlruns
