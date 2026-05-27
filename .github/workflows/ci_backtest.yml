@@ -1,6 +1,8 @@
 name: CI — Backtest Gate
 
 on:
+  schedule:
+    - cron: "0 18 * * 0"  # Every Sunday 6PM UTC — signal ready before Monday open
   push:
     branches: ["**"]
   pull_request:
