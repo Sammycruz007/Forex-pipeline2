@@ -31,10 +31,24 @@ st.markdown("""
 # API helpers
 # ─────────────────────────────────────────────
 
+def wake_up_api():
+    """
+    Render free tier sleeps after 15 min inactivity.
+    This pings the health endpoint first to wake it up.
+    Shows a spinner while waiting.
+    """
+    import time
+    try:
+        r = requests.get(f"{API_BASE}/health", timeout=60)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
 @st.cache_data(ttl=300)
 def fetch_signal():
     try:
-        r = requests.get(f"{API_BASE}/signal", timeout=10)
+        r = requests.get(f"{API_BASE}/signal", timeout=60)
         r.raise_for_status()
         return r.json()
     except Exception as e:
@@ -45,7 +59,7 @@ def fetch_signal():
 @st.cache_data(ttl=300)
 def fetch_history(days: int = 120):
     try:
-        r = requests.get(f"{API_BASE}/history?days={days}", timeout=10)
+        r = requests.get(f"{API_BASE}/history?days={days}", timeout=60)
         r.raise_for_status()
         data = r.json()
         df   = pd.DataFrame(data["data"])
@@ -60,7 +74,7 @@ def fetch_history(days: int = 120):
 @st.cache_data(ttl=300)
 def fetch_importance():
     try:
-        r = requests.get(f"{API_BASE}/features/importance", timeout=10)
+        r = requests.get(f"{API_BASE}/features/importance", timeout=60)
         r.raise_for_status()
         return r.json()["features"]
     except Exception as e:
@@ -344,6 +358,10 @@ def main():
         if st.button("🔄 Refresh Data"):
             st.cache_data.clear()
             st.rerun()
+
+    # Wake up Render free tier if sleeping
+    with st.spinner("Connecting to signal server... (may take 30-60s on first load)"):
+        wake_up_api()
 
     # Fetch data
     signal     = fetch_signal()
