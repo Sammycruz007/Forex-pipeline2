@@ -141,14 +141,15 @@ def build_candlestick_chart(df: pd.DataFrame, signal: dict) -> go.Figure:
         showlegend = True,
     ))
 
-    # Vertical line marking forecast start
-    fig.add_vline(
-        x          = last_date,
-        line_dash  = "dot",
-        line_color = "#888888",
-        annotation_text = "Forecast Start",
-        annotation_font_color = "#888888"
-    )
+    # Vertical line — scatter trace instead of add_vline
+    fig.add_trace(go.Scatter(
+        x    = [str(last_date.date()), str(last_date.date())],
+        y    = [df["close"].min() * 0.999, df["close"].max() * 1.001],
+        mode = "lines",
+        name = "Forecast Start",
+        line = dict(color="#888888", dash="dot", width=1),
+        showlegend = False,
+    ))
 
     # Annotation on the forecast
     confidence = signal["confidence"]
