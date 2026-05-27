@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 
-API_BASE = "http://localhost:8000"
+API_BASE = "https://forex-signal-api-28dg.onrender.com"
 
 st.set_page_config(
     page_title  = "Forex Signal Dashboard",
