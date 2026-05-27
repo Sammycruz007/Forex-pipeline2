@@ -60,6 +60,11 @@ jobs:
         env:
           PYTHONPATH: .
 
+      - name: Wake up Render API
+        run: |
+          curl -s https://forex-signal-api-28dg.onrender.com/health || true
+          echo "API pinged"
+
       - name: Upload trained model
         uses: actions/upload-artifact@v4
         if: success()
