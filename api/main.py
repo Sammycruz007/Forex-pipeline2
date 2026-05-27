@@ -5,6 +5,7 @@ Serves live directional signals for Forex pairs.
 
 import logging
 import os
+import os
 from datetime import datetime
 from typing import List, Dict
 
