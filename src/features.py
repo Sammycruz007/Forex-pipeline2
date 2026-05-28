@@ -31,13 +31,13 @@ def add_trend_features(df: pd.DataFrame) -> pd.DataFrame:
     df["sma_20"]  = ta.trend.sma_indicator(close, window=20)
     df["sma_50"]  = ta.trend.sma_indicator(close, window=50)
     df["ema_10"]  = ta.trend.ema_indicator(close, window=10)
-    df["ema_20"]  = ta.trend.ema_indicator(close, window=20)
+    # ema_20 removed — redundant with sma_20
 
     df["price_vs_sma20"] = (close - df["sma_20"]) / df["sma_20"]
     df["price_vs_sma50"] = (close - df["sma_50"]) / df["sma_50"]
 
     macd = ta.trend.MACD(close, window_slow=26, window_fast=12, window_sign=9)
-    df["macd"]           = macd.macd()
+    # macd raw removed — redundant with signal and histogram
     df["macd_signal"]    = macd.macd_signal()
     df["macd_histogram"] = macd.macd_diff()
 
@@ -54,7 +54,7 @@ def add_momentum_features(df: pd.DataFrame) -> pd.DataFrame:
     low   = df["Low"]
 
     df["rsi_14"] = ta.momentum.RSIIndicator(close, window=14).rsi()
-    df["rsi_7"]  = ta.momentum.RSIIndicator(close, window=7).rsi()
+    # rsi_7 removed — redundant with rsi_14, zero marginal importance
 
     stoch = ta.momentum.StochasticOscillator(high, low, close, window=14)
     df["stoch_k"] = stoch.stoch()
@@ -88,17 +88,24 @@ def add_volatility_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_lag_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Lag features — pruned version.
+    Removed: return_lag_1 (noise), gap (low importance)
+    Kept:    return_lag_2, return_lag_3 (highest lag importance)
+             hl_range (high importance)
+             volatility_10, volatility_20 (high importance)
+    """
     close = df["Close"]
 
-    for lag in [1, 2, 3, 5, 10]:
+    # Keep only lags with meaningful importance
+    for lag in [2, 3, 5, 10]:
         df[f"return_lag_{lag}"] = close.pct_change(periods=lag)
 
     df["hl_range"]      = (df["High"] - df["Low"]) / df["Close"]
-    df["gap"]           = (df["Open"] - df["Close"].shift(1)) / df["Close"].shift(1)
     df["volatility_10"] = close.pct_change().rolling(window=10).std()
     df["volatility_20"] = close.pct_change().rolling(window=20).std()
 
-    logger.info("Lag + volatility proxy features added")
+    logger.info("Lag + volatility proxy features added (pruned)")
     return df
 
 

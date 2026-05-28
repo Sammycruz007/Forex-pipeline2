@@ -56,8 +56,20 @@ def load_features(config: dict) -> pd.DataFrame:
 
 
 def prepare_data(df: pd.DataFrame, config: dict) -> Tuple[pd.DataFrame, pd.Series]:
-    drop_cols    = ["target", "future_return", "Volume",
-                    "Open", "High", "Low", "Close"]
+    # Explicitly define kept features after V2 pruning experiment
+    # Removed: zero-importance and redundant features
+    # rsi_7, ema_20, macd, gap, return_lag_1
+    # above_sma20, above_sma50, sma_cross (redundant with price_vs_sma)
+    # rsi_oversold, rsi_overbought (redundant with rsi_14)
+    # vol_expanding (redundant with volatility_10/20)
+    # up_streak, down_streak (noisy)
+    # gold_above_sma20, dxy_above_sma20, tnx_above_sma20 (redundant with rsi)
+    # tnx_return_1d (borderline, Tier 2)
+
+    drop_cols = [
+        "target", "future_return", "Volume",
+        "Open", "High", "Low", "Close"
+    ]
     feature_cols = [c for c in df.columns if c not in drop_cols]
     X = df[feature_cols]
     y = df["target"]
@@ -239,7 +251,7 @@ def train_lightgbm(
 
     study = optuna.create_study(
         direction="maximize",
-        sampler=TPESampler(seed=config["model"]["random_state"])
+        sampler=TPESampler(seed=42)
     )
     study.optimize(
         lambda trial: optuna_objective(trial, X_train, y_train, config),
