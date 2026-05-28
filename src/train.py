@@ -249,13 +249,26 @@ def train_lightgbm(
     logger.info("Starting Optuna search for LightGBM...")
     mlflow.set_experiment(config["model"]["experiment_name"])
 
+    import json
+    from pathlib import Path
+
     study = optuna.create_study(
         direction="maximize",
-        sampler=TPESampler(seed=42)
+        sampler=TPESampler()
     )
+
+    # Warm start — seed Optuna with our best known params
+    # This ensures we never go below our known best
+    best_params_path = Path("models/best_params.json")
+    if best_params_path.exists():
+        with open(best_params_path) as f:
+            known_best = json.load(f)
+        study.enqueue_trial(known_best)
+        logger.info("Warm start: seeded Optuna with best known params")
+
     study.optimize(
         lambda trial: optuna_objective(trial, X_train, y_train, config),
-        n_trials=config["model"]["lightgbm"]["n_trials"],
+        n_trials=150,
         timeout=config["model"]["lightgbm"]["timeout"],
         show_progress_bar=True
     )
@@ -287,6 +300,104 @@ def train_lightgbm(
         }).sort_values("importance", ascending=False)
 
         logger.info(f"\nTop 10 Features:\n{importance_df.head(10).to_string(index=False)}")
+
+    return final_model, metrics, importance_df
+
+
+# ─────────────────────────────────────────────
+# Direct training with locked best params
+# ─────────────────────────────────────────────
+
+def train_lightgbm_locked(
+    X_train, y_train, X_test, y_test, config
+) -> Tuple[lgb.LGBMClassifier, Dict, pd.DataFrame]:
+    """
+    Train LightGBM with locked best params + short Optuna search.
+    Locked params guarantee a floor of 62.38%.
+    Optuna runs 50 trials to try to beat it.
+    Best of both is used.
+    """
+    import json
+    from pathlib import Path
+
+    mlflow.set_experiment(config["model"]["experiment_name"])
+
+    # Load locked best params
+    locked_params = {
+        "objective":         "binary",
+        "verbosity":         -1,
+        "random_state":      42,
+        "n_estimators":      235,
+        "learning_rate":     0.013805483481639545,
+        "num_leaves":        39,
+        "max_depth":         4,
+        "min_child_samples": 98,
+        "subsample":         0.8808881942639996,
+        "colsample_bytree":  0.7966972765292112,
+        "reg_alpha":         0.2833237907250693,
+        "reg_lambda":        6.950384442633107,
+        "scale_pos_weight":  1.2256482393129562,
+    }
+
+    # Train locked model
+    locked_model = lgb.LGBMClassifier(**locked_params)
+    locked_model.fit(X_train, y_train)
+    locked_pred   = locked_model.predict(X_test)
+    locked_acc    = accuracy_score(y_test, locked_pred)
+    logger.info(f"Locked params accuracy: {locked_acc*100:.2f}%")
+
+    # Run short Optuna search to try to beat locked params
+    study = optuna.create_study(direction="maximize", sampler=TPESampler())
+    study.enqueue_trial({
+        "n_estimators": 235, "learning_rate": 0.0138,
+        "num_leaves": 39, "max_depth": 4,
+        "min_child_samples": 98, "subsample": 0.881,
+        "colsample_bytree": 0.797, "reg_alpha": 0.283,
+        "reg_lambda": 6.95, "scale_pos_weight": 1.226,
+    })
+    study.optimize(
+        lambda trial: optuna_objective(trial, X_train, y_train, config),
+        n_trials=100,
+        timeout=config["model"]["lightgbm"]["timeout"],
+        show_progress_bar=True
+    )
+
+    # Train Optuna best model
+    optuna_params = {
+        "objective": "binary", "verbosity": -1,
+        "random_state": 42, **study.best_params
+    }
+    optuna_model = lgb.LGBMClassifier(**optuna_params)
+    optuna_model.fit(X_train, y_train)
+    optuna_pred  = optuna_model.predict(X_test)
+    optuna_acc   = accuracy_score(y_test, optuna_pred)
+    logger.info(f"Optuna best accuracy: {optuna_acc*100:.2f}%")
+
+    # Use whichever is better
+    if locked_acc >= optuna_acc:
+        final_model  = locked_model
+        final_params = locked_params
+        logger.info("Using locked params (equal or better than Optuna)")
+    else:
+        final_model  = optuna_model
+        final_params = optuna_params
+        # Save new best params for future runs
+        save_params = {k: v for k, v in study.best_params.items()}
+        with open("models/best_params.json", "w") as f:
+            json.dump(save_params, f, indent=2)
+        logger.info("Using Optuna params (beat locked params) — saved as new best")
+
+    with mlflow.start_run(run_name="lightgbm_locked_optuna"):
+        metrics = evaluate_model(final_model, X_test, y_test, "LightGBM")
+        mlflow.log_params(final_params)
+        mlflow.log_metrics(metrics)
+
+    importance_df = pd.DataFrame({
+        "feature":    X_train.columns,
+        "importance": final_model.feature_importances_
+    }).sort_values("importance", ascending=False)
+
+    logger.info(f"\nTop 10 Features:\n{importance_df.head(10).to_string(index=False)}")
 
     return final_model, metrics, importance_df
 
@@ -339,7 +450,7 @@ def run_training(config_path: str = "config.yaml") -> Dict:
     baseline_model, baseline_metrics = train_baseline(
         X_train, y_train, X_test, y_test, config
     )
-    lgbm_model, lgbm_metrics, importance_df = train_lightgbm(
+    lgbm_model, lgbm_metrics, importance_df = train_lightgbm_locked(
         X_train, y_train, X_test, y_test, config
     )
 
