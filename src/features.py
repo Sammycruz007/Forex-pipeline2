@@ -208,6 +208,8 @@ def add_target(df: pd.DataFrame, horizon: int = 5) -> pd.DataFrame:
     return df
 
 
+
+
 def build_feature_store(config_path: str = "config.yaml") -> pd.DataFrame:
     config        = load_config(config_path)
     symbol        = config["data"]["symbol"]
@@ -229,6 +231,7 @@ def build_feature_store(config_path: str = "config.yaml") -> pd.DataFrame:
 
     # Macro features — the new signal
     df = add_macro_features(df, config)
+
 
     # Target — always last
     df = add_target(df, horizon=horizon)
