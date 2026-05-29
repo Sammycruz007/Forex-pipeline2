@@ -156,7 +156,7 @@ def add_macro_features(
     macro_map = {
         "DX-Y.NYB": "dxy",
         "^TNX":     "tnx",
-        "GC=F":     "gold",
+        "GC=F":     "gold"
     }
 
     for symbol in macro_symbols:
