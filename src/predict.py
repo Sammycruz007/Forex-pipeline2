@@ -24,23 +24,34 @@ def load_config(config_path: str = "config.yaml") -> dict:
 
 
 def load_model(config: dict):
-    """Load the best model — LightGBM if available, else baseline."""
+    """
+    Load production model — whichever won the last training run.
+    Reads production_model_name.txt to know which model won.
+    Falls back to lgbm_model.joblib for backward compatibility.
+    """
     model_path    = Path(config["model"]["model_path"])
-    lgbm_path     = model_path / "lgbm_model.joblib"
-    baseline_path = model_path / "baseline_model.joblib"
     cols_path     = model_path / "feature_cols.joblib"
+    name_path     = model_path / "production_model_name.txt"
+    prod_path     = model_path / "production_model.joblib"
 
-    if lgbm_path.exists():
-        model      = joblib.load(lgbm_path)
+    # Read winner name
+    if name_path.exists():
+        with open(name_path) as f:
+            model_name = f.read().strip()
+    else:
         model_name = "LightGBM"
-    elif baseline_path.exists():
-        model      = joblib.load(baseline_path)
-        model_name = "LogisticRegression"
+
+    # Load production model
+    if prod_path.exists():
+        model = joblib.load(prod_path)
+    elif (model_path / "lgbm_model.joblib").exists():
+        model      = joblib.load(model_path / "lgbm_model.joblib")
+        model_name = "LightGBM"
     else:
         raise FileNotFoundError("No trained model found. Run src/train.py first.")
 
     feature_cols = joblib.load(cols_path)
-    logger.info(f"Loaded model: {model_name}")
+    logger.info(f"Loaded production model: {model_name}")
     return model, feature_cols, model_name
 
 
