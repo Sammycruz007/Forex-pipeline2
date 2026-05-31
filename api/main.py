@@ -114,12 +114,25 @@ def health_check():
 @app.get("/signal", response_model=SignalResponse, tags=["Signal"])
 def get_signal():
     """
-    Get the current trading signal for the configured Forex pair.
-    Returns direction (UP/DOWN), probability, and 5-day forecast.
+    Get the weekly trading signal — locked on Sunday, stable all week.
+    Falls back to live calculation if no locked signal exists.
     """
     try:
-        signal = generate_signal()
-        signal["generated_at"] = datetime.utcnow().isoformat()
+        import sys
+        sys.path.insert(0, ".")
+        from src.signal_store import load_weekly_signal, is_signal_current
+
+        # Try to serve locked weekly signal first
+        if is_signal_current():
+            signal = load_weekly_signal()
+            signal["generated_at"] = datetime.utcnow().isoformat()
+            logger.info("Serving locked weekly signal")
+        else:
+            # Fallback to live calculation
+            signal = generate_signal()
+            signal["generated_at"] = datetime.utcnow().isoformat()
+            logger.info("Serving live signal (no locked signal found)")
+
         return SignalResponse(**signal)
     except FileNotFoundError as e:
         raise HTTPException(status_code=503, detail=str(e))

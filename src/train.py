@@ -401,6 +401,19 @@ def run_training(config_path: str = "config.yaml") -> Dict:
     # Gate on winner only
     gate_passed = check_gate(all_metrics[winner_name], config, winner_name)
 
+    # Generate and lock weekly signal after successful training
+    try:
+        import sys
+        sys.path.insert(0, ".")
+        from src.predict import generate_signal
+        from src.signal_store import save_weekly_signal
+        signal = generate_signal()
+        save_weekly_signal(signal)
+        logger.info(f"Weekly signal locked: {signal['signal']} "
+                    f"{signal['confidence']} ({signal['up_probability']*100:.1f}%)")
+    except Exception as e:
+        logger.warning(f"Signal locking failed (non-critical): {e}")
+
     print(f"\nBaseline Accuracy : {baseline_metrics['accuracy']*100:.2f}%")
     print(f"LightGBM Accuracy : {lgbm_metrics['accuracy']*100:.2f}%")
     print(f"XGBoost  Accuracy : {xgb_metrics['accuracy']*100:.2f}%")
