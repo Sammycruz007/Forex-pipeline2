@@ -66,10 +66,13 @@ jobs:
           curl -s https://forex-signal-api-28dg.onrender.com/health || true
           echo "API pinged"
 
-      - name: Upload trained model
-        uses: actions/upload-artifact@v4
-        if: success()
-        with:
-          name: trained-model
-          path: models/
-          retention-days: 7
+      - name: Commit trained model back to repo
+        if: success() && github.ref == 'refs/heads/main'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add models/
+          git diff --staged --quiet || git commit -m "chore: auto-update production model [skip ci]"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
