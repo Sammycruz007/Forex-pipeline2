@@ -33,6 +33,8 @@ cachetools==5.5.2
     # via
     #   mlflow
     #   streamlit
+catboost==1.2.5
+    # via -r requirements.in
 certifi==2026.4.22
     # via
     #   curl-cffi
@@ -95,6 +97,8 @@ graphql-core==3.2.8
     #   graphql-relay
 graphql-relay==3.2.0
     # via graphene
+graphviz==0.21
+    # via catboost
 greenlet==3.5.0
     # via sqlalchemy
 gunicorn==22.0.0
@@ -151,7 +155,9 @@ markupsafe==3.0.3
     #   mako
     #   werkzeug
 matplotlib==3.10.9
-    # via mlflow
+    # via
+    #   catboost
+    #   mlflow
 mdurl==0.1.2
     # via markdown-it-py
 mlflow==2.13.2
@@ -163,6 +169,7 @@ narwhals==2.21.2
 numpy==1.26.4
     # via
     #   -r requirements.in
+    #   catboost
     #   contourpy
     #   lightgbm
     #   matplotlib
@@ -175,6 +182,7 @@ numpy==1.26.4
     #   scipy
     #   streamlit
     #   ta
+    #   xgboost
     #   yfinance
 opentelemetry-api==1.42.0
     # via
@@ -199,6 +207,7 @@ packaging==24.2
 pandas==2.2.3
     # via
     #   -r requirements.in
+    #   catboost
     #   mlflow
     #   streamlit
     #   ta
@@ -212,7 +221,9 @@ pillow==10.4.0
 platformdirs==4.9.6
     # via yfinance
 plotly==5.22.0
-    # via -r requirements.in
+    # via
+    #   -r requirements.in
+    #   catboost
 protobuf==4.25.9
     # via
     #   mlflow
@@ -290,13 +301,16 @@ scikit-learn==1.5.2
     #   mlflow
 scipy==1.15.3
     # via
+    #   catboost
     #   lightgbm
     #   mlflow
     #   scikit-learn
+    #   xgboost
 shellingham==1.5.4
     # via typer
 six==1.17.0
     # via
+    #   catboost
     #   python-dateutil
     #   querystring-parser
 smmap==5.0.3
@@ -377,6 +391,8 @@ websockets==16.0
     #   yfinance
 werkzeug==3.1.8
     # via flask
+xgboost==2.0.3
+    # via -r requirements.in
 yfinance==1.3.0
     # via -r requirements.in
 zipp==4.1.0

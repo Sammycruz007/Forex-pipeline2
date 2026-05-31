@@ -31,3 +31,7 @@ pyyaml>=6.0.1
 joblib>=1.4.0
 python-dotenv>=1.0.1
 requests>=2.32.0
+xgboost==2.0.3
+catboost==1.2.5
+xgboost==2.0.3
+catboost==1.2.5

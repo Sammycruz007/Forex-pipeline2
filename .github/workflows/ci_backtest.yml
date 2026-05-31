@@ -29,6 +29,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest==8.2.0 httpx==0.27.0
+          pip install xgboost==2.0.3 catboost==1.2.5
 
       - name: Download market data
         run: python src/ingestion.py
