@@ -1,46 +1,46 @@
 {
   "symbol": "EURUSD=X",
-  "as_of_date": "2026-06-26",
-  "current_price": 1.1389521360397339,
+  "as_of_date": "2026-07-02",
+  "current_price": 1.13779878616333,
   "signal": "UP",
-  "up_probability": 0.7864,
-  "dn_probability": 0.2136,
+  "up_probability": 0.7046,
+  "dn_probability": 0.2954,
   "confidence": "HIGH",
   "horizon_days": 5,
   "daily_forecasts": [
     {
       "day": 1,
       "direction": "UP",
-      "up_prob": 0.7864,
-      "dn_prob": 0.2136
+      "up_prob": 0.7046,
+      "dn_prob": 0.2954
     },
     {
       "day": 2,
       "direction": "UP",
-      "up_prob": 0.7864,
-      "dn_prob": 0.2136
+      "up_prob": 0.7046,
+      "dn_prob": 0.2954
     },
     {
       "day": 3,
       "direction": "UP",
-      "up_prob": 0.7864,
-      "dn_prob": 0.2136
+      "up_prob": 0.7046,
+      "dn_prob": 0.2954
     },
     {
       "day": 4,
       "direction": "UP",
-      "up_prob": 0.7864,
-      "dn_prob": 0.2136
+      "up_prob": 0.7046,
+      "dn_prob": 0.2954
     },
     {
       "day": 5,
       "direction": "UP",
-      "up_prob": 0.7864,
-      "dn_prob": 0.2136
+      "up_prob": 0.7046,
+      "dn_prob": 0.2954
     }
   ],
   "model_used": "CatBoost",
-  "locked_at": "2026-06-28T19:03:25.038697",
-  "valid_from": "2026-06-28",
-  "valid_until": "2026-07-03"
+  "locked_at": "2026-07-05T19:03:10.890676",
+  "valid_from": "2026-07-05",
+  "valid_until": "2026-07-10"
 }
