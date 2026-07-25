@@ -258,6 +258,22 @@ def run_evaluation(
 
     gate_passed = check_gate(metrics, config)
 
+    # Persist metrics so the API (main.py) can serve them without
+    # recomputing a full backtest on every /signal request.
+    try:
+        import json
+        model_path = Path(config["model"]["model_path"])
+        model_path.mkdir(parents=True, exist_ok=True)
+        metrics_out = {
+            k: (None if isinstance(v, float) and np.isnan(v) else v)
+            for k, v in metrics.items()
+        }
+        with open(model_path / "model_metrics.json", "w") as f:
+            json.dump(metrics_out, f, indent=2)
+        logger.info(f"Metrics written to {model_path / 'model_metrics.json'}")
+    except Exception as e:
+        logger.warning(f"Could not write model_metrics.json (non-critical): {e}")
+
     if log_mlflow:
         try:
             log_to_mlflow(metrics, model_name, gate_passed, config)
