@@ -5,7 +5,6 @@ Serves live directional signals for Forex pairs.
 
 import logging
 import os
-import os
 from datetime import datetime
 from typing import List, Dict
 
@@ -24,6 +23,28 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+PROBA_THRESHOLD = 0.65
+
+
+def load_backtest_metrics(config: dict) -> dict:
+    """
+    Read model_metrics.json written by evaluate.py's run_evaluation().
+    Returns {} if the file doesn't exist yet (e.g. before the first
+    evaluate.py run) so callers can degrade gracefully.
+    """
+    import json
+    from pathlib import Path
+
+    model_path   = Path(config["model"]["model_path"])
+    metrics_path = model_path / "model_metrics.json"
+
+    if not metrics_path.exists():
+        logger.warning(f"model_metrics.json not found at {metrics_path}")
+        return {}
+
+    with open(metrics_path) as f:
+        return json.load(f)
 
 # ─────────────────────────────────────────────
 # App setup
@@ -47,11 +68,11 @@ app.add_middleware(
 # Response schemas
 # ─────────────────────────────────────────────
 
-class DailyForecast(BaseModel):
-    day:       int
-    direction: str
-    up_prob:   float
-    dn_prob:   float
+class Forecast(BaseModel):
+    horizon_days: int
+    direction:    str
+    up_prob:      float
+    dn_prob:      float
 
 
 class SignalResponse(BaseModel):
@@ -63,9 +84,12 @@ class SignalResponse(BaseModel):
     dn_probability:  float
     confidence:      str
     horizon_days:    int
-    daily_forecasts: List[DailyForecast]
+    forecast:        Forecast
     model_used:      str
     generated_at:    str
+    precision_at_threshold: float = None
+    proba_threshold:        float = None
+    accuracy:               float = None
 
 
 class HealthResponse(BaseModel):
@@ -133,6 +157,15 @@ def get_signal():
             signal["generated_at"] = datetime.utcnow().isoformat()
             logger.info("Serving live signal (no locked signal found)")
 
+        # Attach backtest-level precision (measured at proba >= threshold)
+        # from evaluate.py's persisted metrics — this is NOT computed from
+        # this single live prediction, it reflects the last backtest run.
+        config           = load_config()
+        backtest_metrics = load_backtest_metrics(config)
+        signal["precision_at_threshold"] = backtest_metrics.get("precision_at_threshold")
+        signal["proba_threshold"]        = PROBA_THRESHOLD
+        signal["accuracy"]               = backtest_metrics.get("accuracy")
+
         return SignalResponse(**signal)
     except FileNotFoundError as e:
         raise HTTPException(status_code=503, detail=str(e))
@@ -178,24 +211,58 @@ def get_history(days: int = 30):
 
 @app.get("/features/importance", tags=["Model"])
 def get_feature_importance():
-    """Return top 15 feature importances from the LightGBM model."""
+    """
+    Return top 15 feature importances from the production XGBoost model.
+
+    The production model is a CalibratedClassifierCV wrapping several
+    fold-fitted XGBClassifier instances (one per inner_cv fold) rather
+    than a single raw model — there's no top-level .feature_importances_.
+    We average importances across each fold's base estimator for a
+    stable ranking instead of arbitrarily picking one fold.
+    """
     try:
         import joblib
+        import numpy as np
         from pathlib import Path
+
         config     = load_config()
         model_path = Path(config["model"]["model_path"])
-        model      = joblib.load(model_path / "lgbm_model.joblib")
-        cols       = joblib.load(model_path / "feature_cols.joblib")
+        prod_path  = model_path / "production_model.joblib"
+        xgb_path   = model_path / "xgb_model.joblib"
+
+        if prod_path.exists():
+            model = joblib.load(prod_path)
+        elif xgb_path.exists():
+            model = joblib.load(xgb_path)
+        else:
+            raise FileNotFoundError("No trained model found. Run src/train.py first.")
+
+        cols = joblib.load(model_path / "feature_cols.joblib")
+
+        if hasattr(model, "calibrated_classifiers_"):
+            # CalibratedClassifierCV — average importances across folds
+            fold_importances = [
+                cc.estimator.feature_importances_
+                for cc in model.calibrated_classifiers_
+            ]
+            importances = np.mean(fold_importances, axis=0)
+        elif hasattr(model, "feature_importances_"):
+            importances = model.feature_importances_
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="Loaded model exposes no feature importances"
+            )
 
         importance = sorted(
-            zip(cols, model.feature_importances_),
+            zip(cols, importances),
             key=lambda x: x[1],
             reverse=True
         )[:15]
 
         return {
             "features": [
-                {"feature": f, "importance": int(i)}
+                {"feature": f, "importance": float(round(i, 6))}
                 for f, i in importance
             ]
         }
