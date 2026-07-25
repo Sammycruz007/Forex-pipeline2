@@ -45,7 +45,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-PROBA_THRESHOLD = 0.65
+PROBA_THRESHOLD = 0.70
 
 # Deterministic best params (from boosting_experiment.py)
 XGB_BEST_PARAMS = {
@@ -187,18 +187,21 @@ def train_baseline(X_train, y_train, X_test, y_test, config):
             best_weight = up_weight
 
     logger.info(f"Best up_weight: {best_weight}")
-    final = Pipeline([
+    base = Pipeline([
         ("scaler", StandardScaler()),
         ("clf", LogisticRegression(
             max_iter=1000, random_state=42,
             class_weight={0: 1.0, 1: best_weight}, C=0.1
         ))
     ])
+
+    calib_cv = TimeSeriesSplit(n_splits=5, gap=10)
+    final = CalibratedClassifierCV(base, method="isotonic", cv=calib_cv)
     final.fit(X_train, y_train)
+
     y_proba = final.predict_proba(X_test)[:, 1]
     metrics = evaluate_model(y_test, final.predict(X_test), y_proba, "Logistic Regression (Baseline)")
     return final, metrics
-
 
 # ─────────────────────────────────────────────
 # XGBoost — deterministic best params + isotonic calibration
