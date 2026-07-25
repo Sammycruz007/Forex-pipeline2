@@ -6,7 +6,7 @@ Serves live directional signals for Forex pairs.
 import logging
 import os
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 import yaml
 import pandas as pd
@@ -87,9 +87,9 @@ class SignalResponse(BaseModel):
     forecast:        Forecast
     model_used:      str
     generated_at:    str
-    precision_at_threshold: float = None
-    proba_threshold:        float = None
-    accuracy:               float = None
+    precision_at_threshold: Optional[float] = None
+    proba_threshold:        Optional[float] = None
+    accuracy:               Optional[float] = None
 
 
 class HealthResponse(BaseModel):
