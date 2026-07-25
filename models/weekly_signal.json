@@ -1,46 +1,20 @@
 {
   "symbol": "EURUSD=X",
-  "as_of_date": "2026-07-17",
-  "current_price": 1.1445575952529907,
-  "signal": "DOWN",
-  "up_probability": 0.4487000107765198,
-  "dn_probability": 0.5512999892234802,
-  "confidence": "MEDIUM",
-  "horizon_days": 5,
-  "daily_forecasts": [
-    {
-      "day": 1,
-      "direction": "DOWN",
-      "up_prob": 0.4487000107765198,
-      "dn_prob": 0.5512999892234802
-    },
-    {
-      "day": 2,
-      "direction": "DOWN",
-      "up_prob": 0.4487000107765198,
-      "dn_prob": 0.5512999892234802
-    },
-    {
-      "day": 3,
-      "direction": "DOWN",
-      "up_prob": 0.4487000107765198,
-      "dn_prob": 0.5512999892234802
-    },
-    {
-      "day": 4,
-      "direction": "DOWN",
-      "up_prob": 0.4487000107765198,
-      "dn_prob": 0.5512999892234802
-    },
-    {
-      "day": 5,
-      "direction": "DOWN",
-      "up_prob": 0.4487000107765198,
-      "dn_prob": 0.5512999892234802
-    }
-  ],
+  "as_of_date": "2026-07-24",
+  "current_price": 1.1375269889831543,
+  "signal": "UP",
+  "up_probability": 0.5305,
+  "dn_probability": 0.4695,
+  "confidence": "LOW",
+  "horizon_days": 2,
+  "forecast": {
+    "horizon_days": 2,
+    "direction": "UP",
+    "up_prob": 0.5305,
+    "dn_prob": 0.4695
+  },
   "model_used": "XGBoost",
-  "locked_at": "2026-07-19T18:51:04.068725",
-  "valid_from": "2026-07-19",
-  "valid_until": "2026-07-24"
+  "locked_at": "2026-07-25T08:01:55.318988",
+  "valid_from": "2026-07-25",
+  "valid_until": "2026-07-28"
 }
