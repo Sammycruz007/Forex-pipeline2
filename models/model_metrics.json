@@ -1,0 +1,17 @@
+{
+  "auc_roc": 0.7951,
+  "pr_auc": 0.8027,
+  "precision_at_threshold": 0.8776,
+  "recall": 0.6745,
+  "f1_minority": 0.7186,
+  "accuracy": 0.734,
+  "n_high_conf": 98,
+  "max_proba_high_conf": 0.9944,
+  "mean_proba_high_conf": 0.7998,
+  "n_samples": 421,
+  "n_correct": 309,
+  "test_start": "2024-11-12",
+  "test_end": "2026-07-22",
+  "down_recall": 0.7943,
+  "up_recall": 0.6745
+}
