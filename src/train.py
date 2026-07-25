@@ -1,10 +1,12 @@
 """
 Production Training Pipeline
-Trains LightGBM, XGBoost, and CatBoost.
-Best model automatically promoted to production.
+Trains XGBoost only, with fixed deterministic hyperparameters.
+Calibrates probabilities with isotonic regression (prefit, walk-forward split).
+Best (only) model promoted to production.
 """
 
 import os
+import glob
 import logging
 import warnings
 import yaml
@@ -17,24 +19,47 @@ from typing import Tuple, Dict
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
-from sklearn.metrics import accuracy_score, f1_score, classification_report
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+    average_precision_score,
+    classification_report,
+)
 from sklearn.model_selection import TimeSeriesSplit
 
-import lightgbm as lgb
 import xgboost as xgb
-from catboost import CatBoostClassifier
-import optuna
-from optuna.samplers import TPESampler
 import mlflow
 
 warnings.filterwarnings("ignore")
-optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+PROBA_THRESHOLD = 0.65
+
+# Deterministic best params (from boosting_experiment.py)
+XGB_BEST_PARAMS = {
+    "objective":        "binary:logistic",
+    "eval_metric":      "logloss",
+    "verbosity":        0,
+    "random_state":     42,
+    "n_estimators":     400,
+    "learning_rate":    0.02885863560550515,
+    "max_depth":        4,
+    "min_child_weight": 7,
+    "subsample":        0.8914001595404614,
+    "colsample_bytree": 0.7454571588517109,
+    "reg_alpha":        0.029597654785768302,
+    "reg_lambda":       0.28862852174095415,
+    "scale_pos_weight": 1.2256482393129562,
+}
 
 
 # ─────────────────────────────────────────────
@@ -74,18 +99,74 @@ def time_series_split(X, y, test_size=0.2):
     return X_train, X_test, y_train, y_test
 
 
-def evaluate_model(y_test, y_pred, model_name: str) -> Dict:
+def walk_forward_calibration_split(X_train, y_train, n_splits=5, gap=10):
+    """
+    Carve the final TimeSeriesSplit fold (with a gap) out of the training
+    set to use as a held-out calibration set. This avoids fitting the
+    isotonic regressor on the same rows the base model was trained on,
+    and keeps a gap between fit/calibration windows to reduce leakage
+    from autocorrelated features/targets.
+    """
+    tscv = TimeSeriesSplit(n_splits=n_splits, gap=gap)
+    *_, (fit_idx, calib_idx) = tscv.split(X_train)
+    X_fit,   X_calib   = X_train.iloc[fit_idx],   X_train.iloc[calib_idx]
+    y_fit,   y_calib   = y_train.iloc[fit_idx],   y_train.iloc[calib_idx]
+    logger.info(
+        f"Calibration split → fit: {len(X_fit)} rows | "
+        f"calib: {len(X_calib)} rows (gap={gap})"
+    )
+    return X_fit, X_calib, y_fit, y_calib
+
+
+# ─────────────────────────────────────────────
+# Evaluation
+# ─────────────────────────────────────────────
+
+def evaluate_model(y_test, y_pred, y_pred_proba, model_name: str) -> Dict:
+    """
+    Full metric suite:
+      - AUC-ROC, PR-AUC (computed on raw probabilities, threshold-independent)
+      - Precision measured ONLY on rows where proba >= PROBA_THRESHOLD
+      - Recall, F1 (on standard 0.5-threshold predictions, for reference)
+      - Max / mean probability among predictions >= PROBA_THRESHOLD
+    """
+    high_conf_mask = y_pred_proba >= PROBA_THRESHOLD
+    n_high_conf    = int(high_conf_mask.sum())
+
+    if n_high_conf > 0:
+        precision_at_threshold = round(
+            precision_score(y_test[high_conf_mask], y_pred[high_conf_mask]), 4
+        )
+        max_proba  = round(float(np.max(y_pred_proba[high_conf_mask])), 4)
+        mean_proba = round(float(np.mean(y_pred_proba[high_conf_mask])), 4)
+    else:
+        precision_at_threshold = float("nan")
+        max_proba  = float("nan")
+        mean_proba = float("nan")
+
     metrics = {
-        "accuracy":        round(accuracy_score(y_test, y_pred), 4),
-        "f1_weighted":     round(f1_score(y_test, y_pred, average="weighted"), 4),
-        "f1_minority":     round(f1_score(y_test, y_pred, average="binary", pos_label=1), 4),
-        "directional_acc": round(accuracy_score(y_test, y_pred), 4),
+        "auc_roc":                round(roc_auc_score(y_test, y_pred_proba), 4),
+        "pr_auc":                 round(average_precision_score(y_test, y_pred_proba), 4),
+        "precision_at_threshold": precision_at_threshold,
+        "recall":                 round(recall_score(y_test, y_pred), 4),
+        "f1_minority":             round(f1_score(y_test, y_pred, average="binary", pos_label=1), 4),
+        "accuracy":                round(accuracy_score(y_test, y_pred), 4),
+        "n_high_conf":             n_high_conf,
+        "max_proba_high_conf":     max_proba,
+        "mean_proba_high_conf":    mean_proba,
     }
+
     logger.info(f"\n{'='*55}")
     logger.info(f"  {model_name}")
     logger.info(f"{'='*55}")
-    logger.info(f"  Directional Accuracy : {metrics['accuracy']*100:.2f}%")
-    logger.info(f"  F1 Score (Up class)  : {metrics['f1_minority']:.4f}")
+    logger.info(f"  AUC-ROC                    : {metrics['auc_roc']:.4f}")
+    logger.info(f"  PR-AUC                     : {metrics['pr_auc']:.4f}")
+    logger.info(f"  Precision (proba >= {PROBA_THRESHOLD}) : {metrics['precision_at_threshold']} "
+                f"(n={n_high_conf})")
+    logger.info(f"  Recall                     : {metrics['recall']:.4f}")
+    logger.info(f"  F1 Score (Up class)        : {metrics['f1_minority']:.4f}")
+    logger.info(f"  Max proba  (>= {PROBA_THRESHOLD})       : {metrics['max_proba_high_conf']}")
+    logger.info(f"  Mean proba (>= {PROBA_THRESHOLD})       : {metrics['mean_proba_high_conf']}")
     logger.info(f"\n{classification_report(y_test, y_pred, target_names=['Down','Up'])}")
     return metrics
 
@@ -95,7 +176,7 @@ def evaluate_model(y_test, y_pred, model_name: str) -> Dict:
 # ─────────────────────────────────────────────
 
 def train_baseline(X_train, y_train, X_test, y_test, config):
-    tscv        = TimeSeriesSplit(n_splits=5)
+    tscv        = TimeSeriesSplit(n_splits=5, gap=10)
     best_weight = 1.0
     best_f1     = 0.0
 
@@ -130,147 +211,60 @@ def train_baseline(X_train, y_train, X_test, y_test, config):
         ))
     ])
     final.fit(X_train, y_train)
-    metrics = evaluate_model(y_test, final.predict(X_test), "Logistic Regression")
+    y_proba = final.predict_proba(X_test)[:, 1]
+    metrics = evaluate_model(y_test, final.predict(X_test), y_proba, "Logistic Regression (Baseline)")
     return final, metrics
 
 
 # ─────────────────────────────────────────────
-# LightGBM — deterministic best params
+# XGBoost — deterministic best params + isotonic calibration
 # ─────────────────────────────────────────────
-
-def train_lightgbm(X_train, y_train, X_test, y_test):
-    logger.info("Training LightGBM...")
-    params = {
-        "objective":         "binary",
-        "verbosity":         -1,
-        "random_state":      42,
-        "n_estimators":      235,
-        "learning_rate":     0.013805483481639545,
-        "num_leaves":        39,
-        "max_depth":         4,
-        "min_child_samples": 98,
-        "subsample":         0.8808881942639996,
-        "colsample_bytree":  0.7966972765292112,
-        "reg_alpha":         0.2833237907250693,
-        "reg_lambda":        6.950384442633107,
-        "scale_pos_weight":  1.2256482393129562,
-    }
-    model = lgb.LGBMClassifier(**params)
-    model.fit(X_train, y_train)
-    metrics = evaluate_model(y_test, model.predict(X_test), "LightGBM")
-    return model, metrics
-
-
-# ─────────────────────────────────────────────
-# XGBoost + Optuna
-# ─────────────────────────────────────────────
-
-def xgb_objective(trial, X_train, y_train):
-    params = {
-        "objective":        "binary:logistic",
-        "eval_metric":      "logloss",
-        "verbosity":        0,
-        "random_state":     42,
-        "n_estimators":     trial.suggest_int("n_estimators", 50, 400),
-        "learning_rate":    trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
-        "max_depth":        trial.suggest_int("max_depth", 3, 8),
-        "min_child_weight": trial.suggest_int("min_child_weight", 1, 20),
-        "subsample":        trial.suggest_float("subsample", 0.5, 1.0),
-        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
-        "reg_alpha":        trial.suggest_float("reg_alpha", 0.01, 10.0, log=True),
-        "reg_lambda":       trial.suggest_float("reg_lambda", 0.01, 10.0, log=True),
-        "scale_pos_weight": trial.suggest_float("scale_pos_weight", 0.8, 2.0),
-    }
-    tscv   = TimeSeriesSplit(n_splits=5)
-    scores = []
-    for train_idx, val_idx in tscv.split(X_train):
-        m = xgb.XGBClassifier(**params)
-        m.fit(
-            X_train.iloc[train_idx], y_train.iloc[train_idx],
-            eval_set=[(X_train.iloc[val_idx], y_train.iloc[val_idx])],
-            verbose=False
-        )
-        preds = m.predict(X_train.iloc[val_idx])
-        scores.append(f1_score(y_train.iloc[val_idx], preds, average="macro"))
-    return np.mean(scores)
-
 
 def train_xgboost(X_train, y_train, X_test, y_test):
-    logger.info("Training XGBoost with Optuna (100 trials)...")
-    study = optuna.create_study(direction="maximize", sampler=TPESampler())
-    study.optimize(
-        lambda trial: xgb_objective(trial, X_train, y_train),
-        n_trials=100,
-        show_progress_bar=True
+    logger.info("Training XGBoost (fixed deterministic params)...")
+
+    # Walk-forward split carved out of the training set for calibration,
+    # so the isotonic regressor never sees rows the base model trained on.
+    X_fit, X_calib, y_fit, y_calib = walk_forward_calibration_split(
+        X_train, y_train, n_splits=5, gap=10
     )
-    logger.info(f"Best CV F1: {study.best_value:.4f}")
-    best = {
-        "objective": "binary:logistic", "verbosity": 0,
-        "random_state": 42, **study.best_params
-    }
-    model = xgb.XGBClassifier(**best)
-    model.fit(X_train, y_train)
-    metrics = evaluate_model(y_test, model.predict(X_test), "XGBoost")
-    return model, metrics, best
 
+    base_model = xgb.XGBClassifier(**XGB_BEST_PARAMS)
+    base_model.fit(X_fit, y_fit)
 
-# ─────────────────────────────────────────────
-# CatBoost + Optuna
-# ─────────────────────────────────────────────
-
-def cat_objective(trial, X_train, y_train):
-    params = {
-        "loss_function":       "Logloss",
-        "eval_metric":         "Accuracy",
-        "verbose":             False,
-        "random_seed":         42,
-        "iterations":          trial.suggest_int("iterations", 100, 600),
-        "learning_rate":       trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
-        "depth":               trial.suggest_int("depth", 3, 8),
-        "l2_leaf_reg":         trial.suggest_float("l2_leaf_reg", 0.1, 10.0, log=True),
-        "bagging_temperature": trial.suggest_float("bagging_temperature", 0.0, 1.0),
-        "border_count":        trial.suggest_int("border_count", 32, 255),
-        "scale_pos_weight":    trial.suggest_float("scale_pos_weight", 0.8, 2.0),
-    }
-    tscv   = TimeSeriesSplit(n_splits=5)
-    scores = []
-    for train_idx, val_idx in tscv.split(X_train):
-        m = CatBoostClassifier(**params)
-        m.fit(
-            X_train.iloc[train_idx], y_train.iloc[train_idx],
-            eval_set=(X_train.iloc[val_idx], y_train.iloc[val_idx]),
-            early_stopping_rounds=30,
-            verbose=False
-        )
-        preds = m.predict(X_train.iloc[val_idx])
-        scores.append(f1_score(y_train.iloc[val_idx], preds, average="macro"))
-    return np.mean(scores)
-
-
-def train_catboost(X_train, y_train, X_test, y_test):
-    logger.info("Training CatBoost with Optuna (100 trials)...")
-    study = optuna.create_study(direction="maximize", sampler=TPESampler())
-    study.optimize(
-        lambda trial: cat_objective(trial, X_train, y_train),
-        n_trials=100,
-        show_progress_bar=True
+    calibrated_model = CalibratedClassifierCV(
+        base_model, method="isotonic", cv="prefit"
     )
-    logger.info(f"Best CV F1: {study.best_value:.4f}")
-    best = {
-        "loss_function": "Logloss",
-        "verbose": False,
-        "random_seed": 42,
-        **study.best_params
-    }
-    model = CatBoostClassifier(**best)
-    model.fit(X_train, y_train, verbose=False)
-    metrics = evaluate_model(y_test, model.predict(X_test), "CatBoost")
-    return model, metrics, best
+    calibrated_model.fit(X_calib, y_calib)
+
+    y_pred       = calibrated_model.predict(X_test)
+    y_pred_proba = calibrated_model.predict_proba(X_test)[:, 1]
+    metrics      = evaluate_model(y_test, y_pred, y_pred_proba, "XGBoost (Calibrated)")
+
+    return calibrated_model, metrics
 
 
 # ─────────────────────────────────────────────
 # Model Selection & Promotion
 # ─────────────────────────────────────────────
+
+def cleanup_old_models(model_path: Path):
+    """
+    Delete previously saved model artifacts before writing new ones.
+    Prevents stale files / git merge conflicts when CI commits model
+    files back to the repo.
+    """
+    patterns = ["*.joblib", "*.cbm", "*.txt"]
+    removed  = []
+    for pattern in patterns:
+        for f in glob.glob(str(model_path / pattern)):
+            os.remove(f)
+            removed.append(f)
+    if removed:
+        logger.info(f"Removed {len(removed)} old model artifact(s): {removed}")
+    else:
+        logger.info("No old model artifacts found to remove.")
+
 
 def promote_winner(
     models: dict,
@@ -279,50 +273,34 @@ def promote_winner(
     config: dict
 ) -> Tuple[str, float]:
     """
-    Compare all trained models.
-    Promote the winner to production.
-    Save all models for audit trail.
+    XGBoost is the only trained model — promote it directly to production.
     """
     model_path = Path(config["model"]["model_path"])
     model_path.mkdir(parents=True, exist_ok=True)
 
-    # Find winner
-    winner_name = max(metrics, key=lambda k: metrics[k]["accuracy"])
+    cleanup_old_models(model_path)
+
+    winner_name = "XGBoost"
     winner_acc  = metrics[winner_name]["accuracy"]
 
     logger.info(f"\n{'='*55}")
     logger.info(f"  MODEL SELECTION RESULTS")
     logger.info(f"{'='*55}")
-    logger.info(f"  {'Model':<20} {'Accuracy':>10} {'F1 Up':>10}")
-    logger.info(f"  {'-'*42}")
-    for name, m in sorted(metrics.items(), key=lambda x: x[1]["accuracy"], reverse=True):
+    logger.info(f"  {'Model':<28} {'Accuracy':>10} {'F1 Up':>10}")
+    logger.info(f"  {'-'*50}")
+    for name, m in metrics.items():
         marker = " ← PROMOTED" if name == winner_name else ""
-        logger.info(f"  {name:<20} {m['accuracy']*100:>9.2f}% {m['f1_minority']:>10.4f}{marker}")
+        logger.info(f"  {name:<28} {m['accuracy']*100:>9.2f}% {m['f1_minority']:>10.4f}{marker}")
     logger.info(f"{'='*55}")
 
-    # Save all models for audit trail
-    joblib.dump(models["LightGBM"], model_path / "lgbm_model.joblib")
-    joblib.dump(models["XGBoost"],  model_path / "xgb_model.joblib")
-    models["CatBoost"].save_model(str(model_path / "catboost_model.cbm"))
-    joblib.dump(models["Baseline"], model_path / "baseline_model.joblib")
+    # Save winner as production model (and backward-compatible aliases)
+    joblib.dump(models[winner_name], model_path / "production_model.joblib")
+    joblib.dump(models[winner_name], model_path / "xgb_model.joblib")
 
-    # Promote winner as production model
-    if winner_name == "CatBoost":
-        models[winner_name].save_model(str(model_path / "production_model.cbm"))
-        # Also save as joblib wrapper for predict.py compatibility
-        joblib.dump(models[winner_name], model_path / "production_model.joblib")
-    else:
-        joblib.dump(models[winner_name], model_path / "production_model.joblib")
-
-    # Save winner name and feature cols
     with open(model_path / "production_model_name.txt", "w") as f:
         f.write(winner_name)
 
     joblib.dump(feature_cols, model_path / "feature_cols.joblib")
-
-    # Also save as lgbm_model.joblib for backward compat with predict.py
-    if winner_name != "LightGBM":
-        joblib.dump(models[winner_name], model_path / "lgbm_model.joblib")
 
     logger.info(f"Winner '{winner_name}' promoted to production")
     logger.info(f"All models saved to {model_path}/")
@@ -335,20 +313,26 @@ def promote_winner(
 # ─────────────────────────────────────────────
 
 def check_gate(metrics: Dict, config: dict, model_name: str) -> bool:
-    min_acc = config["thresholds"]["min_directional_accuracy"]
-    min_f1  = config["thresholds"]["min_f1_score"]
-    acc_pass = metrics["directional_acc"] >= min_acc
-    f1_pass  = metrics["f1_minority"]     >= min_f1
-    passed   = acc_pass and f1_pass
+    min_acc       = config["thresholds"]["min_directional_accuracy"]
+    min_f1        = config["thresholds"]["min_f1_score"]
+    min_precision = config["thresholds"].get("min_precision_at_threshold", 0.0)
+
+    acc_pass       = metrics["accuracy"]                >= min_acc
+    f1_pass        = metrics["f1_minority"]             >= min_f1
+    precision_val  = metrics["precision_at_threshold"]
+    precision_pass = (not np.isnan(precision_val)) and (precision_val >= min_precision)
+    passed         = acc_pass and f1_pass and precision_pass
 
     logger.info(f"\n{'='*55}")
     logger.info(f"  Quality Gate — {model_name} (Production)")
     logger.info(f"{'='*55}")
-    logger.info(f"  Directional Accuracy : {metrics['directional_acc']:.4f} "
+    logger.info(f"  Directional Accuracy       : {metrics['accuracy']:.4f} "
                 f"(min: {min_acc}) → {'PASS ✓' if acc_pass else 'FAIL ✗'}")
-    logger.info(f"  F1 Minority Class    : {metrics['f1_minority']:.4f} "
+    logger.info(f"  F1 Minority Class          : {metrics['f1_minority']:.4f} "
                 f"(min: {min_f1}) → {'PASS ✓' if f1_pass else 'FAIL ✗'}")
-    logger.info(f"  Overall Gate         : {'PASSED ✓' if passed else 'FAILED ✗'}")
+    logger.info(f"  Precision (proba >= {PROBA_THRESHOLD}) : {precision_val} "
+                f"(min: {min_precision}) → {'PASS ✓' if precision_pass else 'FAIL ✗'}")
+    logger.info(f"  Overall Gate               : {'PASSED ✓' if passed else 'FAILED ✗'}")
     return passed
 
 
@@ -371,28 +355,19 @@ def run_training(config_path: str = "config.yaml") -> Dict:
     all_models  = {}
     all_metrics = {}
 
-    # Train all models
     logger.info("\n" + "="*55)
-    logger.info("  TRAINING ALL MODELS")
+    logger.info("  TRAINING MODELS")
     logger.info("="*55)
 
-    baseline, baseline_metrics       = train_baseline(X_train, y_train, X_test, y_test, config)
-    all_models["Baseline"]           = baseline
-    all_metrics["Baseline"]          = baseline_metrics
+    baseline, baseline_metrics = train_baseline(X_train, y_train, X_test, y_test, config)
+    all_models["Baseline"]     = baseline
+    all_metrics["Baseline"]    = baseline_metrics
 
-    lgbm_model, lgbm_metrics         = train_lightgbm(X_train, y_train, X_test, y_test)
-    all_models["LightGBM"]           = lgbm_model
-    all_metrics["LightGBM"]          = lgbm_metrics
+    xgb_model, xgb_metrics = train_xgboost(X_train, y_train, X_test, y_test)
+    all_models["XGBoost"]  = xgb_model
+    all_metrics["XGBoost"] = xgb_metrics
 
-    xgb_model, xgb_metrics, _        = train_xgboost(X_train, y_train, X_test, y_test)
-    all_models["XGBoost"]            = xgb_model
-    all_metrics["XGBoost"]           = xgb_metrics
-
-    cat_model, cat_metrics, _        = train_catboost(X_train, y_train, X_test, y_test)
-    all_models["CatBoost"]           = cat_model
-    all_metrics["CatBoost"]          = cat_metrics
-
-    # Promote winner
+    # Promote winner (XGBoost only)
     winner_name, winner_acc = promote_winner(
         all_models, all_metrics,
         list(X_train.columns), config
@@ -414,12 +389,17 @@ def run_training(config_path: str = "config.yaml") -> Dict:
     except Exception as e:
         logger.warning(f"Signal locking failed (non-critical): {e}")
 
-    print(f"\nBaseline Accuracy : {baseline_metrics['accuracy']*100:.2f}%")
-    print(f"LightGBM Accuracy : {lgbm_metrics['accuracy']*100:.2f}%")
-    print(f"XGBoost  Accuracy : {xgb_metrics['accuracy']*100:.2f}%")
-    print(f"CatBoost Accuracy : {cat_metrics['accuracy']*100:.2f}%")
-    print(f"Winner            : {winner_name} ({winner_acc*100:.2f}%)")
-    print(f"Gate Passed       : {gate_passed}")
+    print(f"\nBaseline Accuracy               : {baseline_metrics['accuracy']*100:.2f}%")
+    print(f"XGBoost  Accuracy                : {xgb_metrics['accuracy']*100:.2f}%")
+    print(f"XGBoost  AUC-ROC                 : {xgb_metrics['auc_roc']:.4f}")
+    print(f"XGBoost  PR-AUC                  : {xgb_metrics['pr_auc']:.4f}")
+    print(f"XGBoost  Precision (>= {PROBA_THRESHOLD})     : {xgb_metrics['precision_at_threshold']}")
+    print(f"XGBoost  Recall                  : {xgb_metrics['recall']:.4f}")
+    print(f"XGBoost  F1 (Up)                 : {xgb_metrics['f1_minority']:.4f}")
+    print(f"XGBoost  Max proba (>= {PROBA_THRESHOLD})     : {xgb_metrics['max_proba_high_conf']}")
+    print(f"XGBoost  Mean proba (>= {PROBA_THRESHOLD})    : {xgb_metrics['mean_proba_high_conf']}")
+    print(f"Winner                           : {winner_name} ({winner_acc*100:.2f}%)")
+    print(f"Gate Passed                      : {gate_passed}")
 
     return {
         "all_metrics":  all_metrics,
