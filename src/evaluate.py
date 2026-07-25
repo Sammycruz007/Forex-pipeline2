@@ -18,6 +18,10 @@ from typing import Dict, Tuple
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+    average_precision_score,
     classification_report,
     confusion_matrix
 )
@@ -27,6 +31,8 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+PROBA_THRESHOLD = 0.65
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
@@ -48,24 +54,28 @@ def load_features(config: dict) -> pd.DataFrame:
 
 
 def load_model(config: dict):
-    model_path = Path(config["model"]["model_path"])
-    lgbm_path  = model_path / "lgbm_model.joblib"
-    base_path  = model_path / "baseline_model.joblib"
-    cols_path  = model_path / "feature_cols.joblib"
+    model_path   = Path(config["model"]["model_path"])
+    prod_path    = model_path / "production_model.joblib"
+    xgb_path     = model_path / "xgb_model.joblib"
+    name_path    = model_path / "production_model_name.txt"
+    cols_path    = model_path / "feature_cols.joblib"
 
     if not cols_path.exists():
         raise FileNotFoundError("feature_cols.joblib not found. Run src/train.py first.")
 
     feature_cols = joblib.load(cols_path)
 
-    if lgbm_path.exists():
-        model      = joblib.load(lgbm_path)
-        model_name = "LightGBM"
-    elif base_path.exists():
-        model      = joblib.load(base_path)
-        model_name = "LogisticRegression"
+    if prod_path.exists():
+        model = joblib.load(prod_path)
+    elif xgb_path.exists():
+        model = joblib.load(xgb_path)
     else:
         raise FileNotFoundError("No trained model found. Run src/train.py first.")
+
+    if name_path.exists():
+        model_name = name_path.read_text().strip()
+    else:
+        model_name = "XGBoost"
 
     logger.info(f"Loaded model: {model_name}")
     return model, feature_cols, model_name
@@ -81,6 +91,12 @@ def run_backtest(
     Walk-forward backtest on the holdout test set.
     Always uses the LAST test_size% of data chronologically.
     Never shuffles — time order is sacred.
+
+    Metric suite matches src/train.py's evaluate_model():
+      - AUC-ROC, PR-AUC (threshold-independent, raw probabilities)
+      - Precision measured ONLY on rows where proba >= PROBA_THRESHOLD
+      - Recall, F1 (standard 0.5-threshold predictions)
+      - Max / mean probability among predictions >= PROBA_THRESHOLD
     """
     drop_cols    = ["target", "future_return", "Volume",
                     "Open", "High", "Low", "Close"]
@@ -99,15 +115,34 @@ def run_backtest(
     y_pred = model.predict(X_test)
     y_prob = model.predict_proba(X_test)[:, 1]
 
+    high_conf_mask = y_prob >= PROBA_THRESHOLD
+    n_high_conf    = int(high_conf_mask.sum())
+
+    if n_high_conf > 0:
+        precision_at_threshold = round(
+            precision_score(y_test[high_conf_mask], y_pred[high_conf_mask]), 4
+        )
+        max_proba  = round(float(np.max(y_prob[high_conf_mask])), 4)
+        mean_proba = round(float(np.mean(y_prob[high_conf_mask])), 4)
+    else:
+        precision_at_threshold = float("nan")
+        max_proba  = float("nan")
+        mean_proba = float("nan")
+
     metrics = {
-        "directional_acc": round(accuracy_score(y_test, y_pred), 4),
-        "f1_weighted":     round(f1_score(y_test, y_pred, average="weighted"), 4),
-        "f1_minority":     round(f1_score(y_test, y_pred, average="binary", pos_label=1), 4),
-        "f1_macro":        round(f1_score(y_test, y_pred, average="macro"), 4),
-        "n_samples":       len(y_test),
-        "n_correct":       int((y_pred == y_test).sum()),
-        "test_start":      str(dates_test[0].date()),
-        "test_end":        str(dates_test[-1].date()),
+        "auc_roc":                round(roc_auc_score(y_test, y_prob), 4),
+        "pr_auc":                 round(average_precision_score(y_test, y_prob), 4),
+        "precision_at_threshold": precision_at_threshold,
+        "recall":                 round(recall_score(y_test, y_pred), 4),
+        "f1_minority":            round(f1_score(y_test, y_pred, average="binary", pos_label=1), 4),
+        "accuracy":               round(accuracy_score(y_test, y_pred), 4),
+        "n_high_conf":            n_high_conf,
+        "max_proba_high_conf":    max_proba,
+        "mean_proba_high_conf":   mean_proba,
+        "n_samples":              len(y_test),
+        "n_correct":              int((y_pred == y_test).sum()),
+        "test_start":             str(dates_test[0].date()),
+        "test_end":               str(dates_test[-1].date()),
     }
 
     # Per-class breakdown
@@ -131,6 +166,13 @@ def run_backtest(
         results_df["correct"].rolling(20).mean()
     )
 
+    logger.info(f"  AUC-ROC                    : {metrics['auc_roc']:.4f}")
+    logger.info(f"  PR-AUC                     : {metrics['pr_auc']:.4f}")
+    logger.info(f"  Precision (proba >= {PROBA_THRESHOLD}) : {metrics['precision_at_threshold']} "
+                f"(n={n_high_conf})")
+    logger.info(f"  Recall                     : {metrics['recall']:.4f}")
+    logger.info(f"  Max proba  (>= {PROBA_THRESHOLD})       : {metrics['max_proba_high_conf']}")
+    logger.info(f"  Mean proba (>= {PROBA_THRESHOLD})       : {metrics['mean_proba_high_conf']}")
     logger.info(f"\n{classification_report(y_test, y_pred, target_names=['Down', 'Up'])}")
     return metrics, results_df
 
@@ -141,27 +183,34 @@ def check_gate(metrics: Dict, config: dict) -> bool:
     Returns True if model passes, False if it fails.
     Exit code matters for CI/CD: 0 = pass, 1 = fail.
     """
-    min_acc = config["thresholds"]["min_directional_accuracy"]
-    min_f1  = config["thresholds"]["min_f1_score"]
+    min_acc       = config["thresholds"]["min_directional_accuracy"]
+    min_f1        = config["thresholds"]["min_f1_score"]
+    min_precision = config["thresholds"].get("min_precision_at_threshold", 0.0)
 
-    acc_pass = metrics["directional_acc"] >= min_acc
-    f1_pass  = metrics["f1_minority"]     >= min_f1
+    acc_pass       = metrics["accuracy"]    >= min_acc
+    f1_pass        = metrics["f1_minority"] >= min_f1
+    precision_val  = metrics["precision_at_threshold"]
+    precision_pass = (not np.isnan(precision_val)) and (precision_val >= min_precision)
 
     logger.info(f"\n{'='*55}")
     logger.info(f"  QUALITY GATE RESULTS")
     logger.info(f"{'='*55}")
-    logger.info(f"  Directional Accuracy : {metrics['directional_acc']:.4f} "
+    logger.info(f"  Directional Accuracy       : {metrics['accuracy']:.4f} "
                 f"(min: {min_acc}) → {'PASS ✓' if acc_pass else 'FAIL ✗'}")
-    logger.info(f"  F1 Minority Class    : {metrics['f1_minority']:.4f} "
+    logger.info(f"  F1 Minority Class          : {metrics['f1_minority']:.4f} "
                 f"(min: {min_f1}) → {'PASS ✓' if f1_pass else 'FAIL ✗'}")
-    logger.info(f"  Up Recall            : {metrics.get('up_recall', 0):.4f}")
-    logger.info(f"  Down Recall          : {metrics.get('down_recall', 0):.4f}")
-    logger.info(f"  Test Samples         : {metrics['n_samples']}")
-    logger.info(f"  Correct Predictions  : {metrics['n_correct']}")
-    logger.info(f"  Test Period          : {metrics['test_start']} → {metrics['test_end']}")
+    logger.info(f"  Precision (proba >= {PROBA_THRESHOLD}) : {precision_val} "
+                f"(min: {min_precision}) → {'PASS ✓' if precision_pass else 'FAIL ✗'}")
+    logger.info(f"  AUC-ROC                    : {metrics['auc_roc']:.4f}")
+    logger.info(f"  PR-AUC                     : {metrics['pr_auc']:.4f}")
+    logger.info(f"  Up Recall                  : {metrics.get('up_recall', 0):.4f}")
+    logger.info(f"  Down Recall                : {metrics.get('down_recall', 0):.4f}")
+    logger.info(f"  Test Samples               : {metrics['n_samples']}")
+    logger.info(f"  Correct Predictions        : {metrics['n_correct']}")
+    logger.info(f"  Test Period                : {metrics['test_start']} → {metrics['test_end']}")
     logger.info(f"{'='*55}")
 
-    passed = acc_pass and f1_pass
+    passed = acc_pass and f1_pass and precision_pass
     logger.info(f"  OVERALL GATE: {'✅ PASSED' if passed else '❌ FAILED'}")
     logger.info(f"{'='*55}")
     return passed
@@ -178,7 +227,11 @@ def log_to_mlflow(
     mlflow.set_experiment(config["model"]["experiment_name"])
 
     with mlflow.start_run(run_name=f"backtest_{model_name}"):
-        mlflow.log_metrics(metrics)
+        numeric_metrics = {
+            k: v for k, v in metrics.items()
+            if isinstance(v, (int, float)) and not isinstance(v, bool)
+        }
+        mlflow.log_metrics(numeric_metrics)
         mlflow.log_param("model_name",   model_name)
         mlflow.log_param("gate_passed",  str(gate_passed))
         mlflow.log_param("test_start", str(metrics["test_start"]))
