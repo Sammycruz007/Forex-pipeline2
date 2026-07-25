@@ -1,7 +1,10 @@
 """
 Production Training Pipeline
 Trains XGBoost only, with fixed deterministic hyperparameters.
-Calibrates probabilities with isotonic regression (prefit, walk-forward split).
+Calibrates probabilities with isotonic regression via out-of-fold
+TimeSeriesSplit (CalibratedClassifierCV handles the base-model-fit +
+calibration internally — no manual prefit split), matching the pattern
+used in ml/signal_ranker.py.
 Best (only) model promoted to production.
 """
 
@@ -29,7 +32,7 @@ from sklearn.metrics import (
     average_precision_score,
     classification_report,
 )
-from sklearn.model_selection import TimeSeriesSplit
+from sklearn.model_selection import TimeSeriesSplit, cross_val_score
 
 import xgboost as xgb
 import mlflow
@@ -97,25 +100,6 @@ def time_series_split(X, y, test_size=0.2):
     logger.info(f"Train: {len(X_train)} | {X_train.index[0].date()} → {X_train.index[-1].date()}")
     logger.info(f"Test : {len(X_test)}  | {X_test.index[0].date()}  → {X_test.index[-1].date()}")
     return X_train, X_test, y_train, y_test
-
-
-def walk_forward_calibration_split(X_train, y_train, n_splits=5, gap=10):
-    """
-    Carve the final TimeSeriesSplit fold (with a gap) out of the training
-    set to use as a held-out calibration set. This avoids fitting the
-    isotonic regressor on the same rows the base model was trained on,
-    and keeps a gap between fit/calibration windows to reduce leakage
-    from autocorrelated features/targets.
-    """
-    tscv = TimeSeriesSplit(n_splits=n_splits, gap=gap)
-    *_, (fit_idx, calib_idx) = tscv.split(X_train)
-    X_fit,   X_calib   = X_train.iloc[fit_idx],   X_train.iloc[calib_idx]
-    y_fit,   y_calib   = y_train.iloc[fit_idx],   y_train.iloc[calib_idx]
-    logger.info(
-        f"Calibration split → fit: {len(X_fit)} rows | "
-        f"calib: {len(X_calib)} rows (gap={gap})"
-    )
-    return X_fit, X_calib, y_fit, y_calib
 
 
 # ─────────────────────────────────────────────
@@ -221,21 +205,48 @@ def train_baseline(X_train, y_train, X_test, y_test, config):
 # ─────────────────────────────────────────────
 
 def train_xgboost(X_train, y_train, X_test, y_test):
+    """
+    Trains XGBoost with fixed deterministic params, wrapped in isotonic
+    calibration. Follows the same pattern as ml/signal_ranker.py:
+    CalibratedClassifierCV is handed a TimeSeriesSplit directly and
+    performs the base-model-fit + out-of-fold calibration internally
+    in a single .fit() call — there's no separate manual prefit step,
+    so the isotonic regressor is always calibrated on folds the base
+    model didn't train on within that fold, without us having to carve
+    out and permanently sacrifice a chunk of the training set up front.
+    """
     logger.info("Training XGBoost (fixed deterministic params)...")
 
-    # Walk-forward split carved out of the training set for calibration,
-    # so the isotonic regressor never sees rows the base model trained on.
-    X_fit, X_calib, y_fit, y_calib = walk_forward_calibration_split(
-        X_train, y_train, n_splits=5, gap=10
-    )
+    gap = 10
+    inner_cv = TimeSeriesSplit(n_splits=5, gap=gap)
 
     base_model = xgb.XGBClassifier(**XGB_BEST_PARAMS)
-    base_model.fit(X_fit, y_fit)
 
     calibrated_model = CalibratedClassifierCV(
-        base_model, method="isotonic", cv="prefit"
+        estimator=base_model, method="isotonic", cv=inner_cv
     )
-    calibrated_model.fit(X_calib, y_calib)
+
+    # Diagnostic: out-of-fold CV scores within the train window only.
+    # These never touch X_test/y_test — purely a sanity check on
+    # calibration-fold consistency before the final OOS evaluation below.
+    cv_auc_roc = cross_val_score(
+        calibrated_model, X_train, y_train, cv=inner_cv,
+        scoring="roc_auc", n_jobs=-1
+    )
+    cv_pr_auc = cross_val_score(
+        calibrated_model, X_train, y_train, cv=inner_cv,
+        scoring="average_precision", n_jobs=-1
+    )
+    logger.info(
+        f"  CV (train window only) | "
+        f"AUC-ROC: {cv_auc_roc.mean():.4f} ± {cv_auc_roc.std():.4f} | "
+        f"PR-AUC: {cv_pr_auc.mean():.4f} ± {cv_pr_auc.std():.4f} | gap={gap}"
+    )
+
+    # Final fit on the full training window — CalibratedClassifierCV
+    # internally refits base models + isotonic regressors out-of-fold
+    # across inner_cv, then this becomes the model used for OOS scoring.
+    calibrated_model.fit(X_train, y_train)
 
     y_pred       = calibrated_model.predict(X_test)
     y_pred_proba = calibrated_model.predict_proba(X_test)[:, 1]
