@@ -23,13 +23,13 @@ class TestModelArtifacts:
 
     def test_model_files_exist(self, config):
         model_path = Path(config["model"]["model_path"])
-        for fname in ["lgbm_model.joblib", "baseline_model.joblib", "feature_cols.joblib"]:
+        for fname in ["production_model.joblib", "xgb_model.joblib", "feature_cols.joblib"]:
             assert (model_path / fname).exists(), \
                 f"Model artifact missing: {fname}"
 
     def test_model_loads_without_error(self, config):
         model_path = Path(config["model"]["model_path"])
-        model      = joblib.load(model_path / "lgbm_model.joblib")
+        model      = joblib.load(model_path / "production_model.joblib")
         assert model is not None
 
     def test_feature_cols_is_list(self, config):
@@ -40,7 +40,7 @@ class TestModelArtifacts:
 
     def test_model_predicts_binary(self, config):
         model_path   = Path(config["model"]["model_path"])
-        model        = joblib.load(model_path / "lgbm_model.joblib")
+        model        = joblib.load(model_path / "production_model.joblib")
         feature_cols = joblib.load(model_path / "feature_cols.joblib")
 
         symbol = config["data"]["symbol"]
@@ -54,7 +54,7 @@ class TestModelArtifacts:
 
     def test_model_returns_probabilities(self, config):
         model_path   = Path(config["model"]["model_path"])
-        model        = joblib.load(model_path / "lgbm_model.joblib")
+        model        = joblib.load(model_path / "production_model.joblib")
         feature_cols = joblib.load(model_path / "feature_cols.joblib")
 
         symbol = config["data"]["symbol"]
@@ -83,7 +83,7 @@ class TestPredictionPipeline:
         required = [
             "symbol", "as_of_date", "current_price",
             "signal", "up_probability", "dn_probability",
-            "confidence", "horizon_days", "daily_forecasts", "model_used"
+            "confidence", "horizon_days", "forecast", "model_used"
         ]
         for key in required:
             assert key in signal, f"Signal missing required key: {key}"
@@ -107,21 +107,21 @@ class TestPredictionPipeline:
         assert signal["confidence"] in {"LOW", "MEDIUM", "HIGH"}, \
             f"Invalid confidence: {signal['confidence']}"
 
-    def test_daily_forecasts_length(self):
+    def test_forecast_horizon_matches_config(self):
         from src.predict import generate_signal
         signal = generate_signal()
-        assert len(signal["daily_forecasts"]) == signal["horizon_days"], \
-            "daily_forecasts length must match horizon_days"
+        assert signal["forecast"]["horizon_days"] == signal["horizon_days"], \
+            "forecast.horizon_days must match top-level horizon_days"
 
-    def test_daily_forecasts_structure(self):
+    def test_forecast_structure(self):
         from src.predict import generate_signal
-        signal = generate_signal()
-        for f in signal["daily_forecasts"]:
-            assert "day"       in f
-            assert "direction" in f
-            assert "up_prob"   in f
-            assert "dn_prob"   in f
-            assert f["direction"] in {"UP", "DOWN"}
+        signal   = generate_signal()
+        forecast = signal["forecast"]
+        assert "horizon_days" in forecast
+        assert "direction"    in forecast
+        assert "up_prob"      in forecast
+        assert "dn_prob"      in forecast
+        assert forecast["direction"] in {"UP", "DOWN"}
 
 
 class TestEvaluationPipeline:
@@ -137,7 +137,8 @@ class TestEvaluationPipeline:
         from src.evaluate import run_evaluation
         metrics, _ = run_evaluation(log_mlflow=False)
         required   = [
-            "directional_acc", "f1_minority",
+            "accuracy", "f1_minority", "auc_roc", "pr_auc",
+            "precision_at_threshold", "recall",
             "n_samples", "n_correct"
         ]
         for key in required:
@@ -146,9 +147,31 @@ class TestEvaluationPipeline:
     def test_accuracy_within_valid_range(self):
         from src.evaluate import run_evaluation
         metrics, _ = run_evaluation(log_mlflow=False)
-        acc        = metrics["directional_acc"]
+        acc        = metrics["accuracy"]
         assert 0.0 <= acc <= 1.0, \
             f"Accuracy must be between 0 and 1, got {acc}"
+
+    def test_auc_metrics_within_valid_range(self):
+        from src.evaluate import run_evaluation
+        metrics, _ = run_evaluation(log_mlflow=False)
+        assert 0.0 <= metrics["auc_roc"] <= 1.0, \
+            f"AUC-ROC must be between 0 and 1, got {metrics['auc_roc']}"
+        assert 0.0 <= metrics["pr_auc"] <= 1.0, \
+            f"PR-AUC must be between 0 and 1, got {metrics['pr_auc']}"
+
+    def test_precision_at_threshold_valid_or_nan(self):
+        """
+        precision_at_threshold is NaN when zero test rows clear
+        PROBA_THRESHOLD (edge case, not a failure) — otherwise it
+        must be a valid precision value in [0, 1].
+        """
+        import math
+        from src.evaluate import run_evaluation
+        metrics   = run_evaluation(log_mlflow=False)[0]
+        precision = metrics["precision_at_threshold"]
+        assert (isinstance(precision, float) and math.isnan(precision)) or \
+               (0.0 <= precision <= 1.0), \
+            f"precision_at_threshold must be NaN or in [0,1], got {precision}"
 
     def test_gate_passes_current_model(self):
         from src.evaluate import run_evaluation
