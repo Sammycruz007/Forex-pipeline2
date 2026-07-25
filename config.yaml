@@ -15,7 +15,7 @@ data:
     - "GC=F"          # Gold (risk-off signal)
 
 features:
-  target_horizon: 2.
+  target_horizon: 2
   target_column: "direction"
   price_column: "Close"
 
