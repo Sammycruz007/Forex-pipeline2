@@ -85,12 +85,40 @@ def fetch_importance():
 # Chart builders
 # ─────────────────────────────────────────────
 
+def _forecast_period_label(signal: dict) -> str:
+    """
+    Compute the actual business-day date range the signal covers,
+    from as_of_date + horizon_days — replaces the old hardcoded
+    'Week of May 26–30' placeholder text.
+    """
+    horizon_days = signal.get("horizon_days", 2)
+    try:
+        as_of = pd.to_datetime(signal["as_of_date"])
+    except Exception:
+        return f"{horizon_days}-Day Forecast"
+
+    dates   = []
+    current = as_of
+    while len(dates) < horizon_days:
+        current += timedelta(days=1)
+        if current.weekday() < 5:
+            dates.append(current)
+
+    start_label = dates[0].strftime("%b %d")
+    end_label   = dates[-1].strftime("%b %d")
+    if dates[0].month == dates[-1].month:
+        return f"{dates[0].strftime('%b')} {dates[0].day}–{dates[-1].day}"
+    return f"{start_label} – {end_label}"
+
+
 def build_candlestick_chart(df: pd.DataFrame, signal: dict) -> go.Figure:
-    """Candlestick chart with a single weekly forecast zone."""
+    """Candlestick chart with a single forecast zone spanning the model's horizon."""
+
+    horizon_days = signal.get("horizon_days", 2)
 
     fig = make_subplots(
         rows=1, cols=1,
-        subplot_titles=["EUR/USD — Daily Chart with Weekly Forecast"]
+        subplot_titles=[f"EUR/USD — Daily Chart with {horizon_days}-Day Forecast"]
     )
 
     fig.add_trace(go.Candlestick(
@@ -112,10 +140,12 @@ def build_candlestick_chart(df: pd.DataFrame, signal: dict) -> go.Figure:
     color        = "#00ff88" if signal_dir == "UP" else "#ff4444"
     fill_color   = "rgba(0,255,136,0.1)" if signal_dir == "UP" else "rgba(255,68,68,0.1)"
 
-    # Generate 5 forecast dates skipping weekends
+    # Generate forecast dates skipping weekends, spanning the model's
+    # actual prediction horizon (previously hardcoded to 5 — the old
+    # 5-day horizon)
     forecast_dates = []
     current        = last_date
-    while len(forecast_dates) < 5:
+    while len(forecast_dates) < horizon_days:
         current += timedelta(days=1)
         if current.weekday() < 5:
             forecast_dates.append(current)
@@ -133,7 +163,7 @@ def build_candlestick_chart(df: pd.DataFrame, signal: dict) -> go.Figure:
         x      = [last_date, end_date],
         y      = [last_price, target_price],
         mode   = "lines+markers",
-        name   = f"Weekly Forecast ({signal_dir})",
+        name   = f"{horizon_days}-Day Forecast ({signal_dir})",
         line   = dict(color=color, width=2, dash="dash"),
         marker = dict(size=8, color=color),
     ))
@@ -201,11 +231,11 @@ def build_candlestick_chart(df: pd.DataFrame, signal: dict) -> go.Figure:
 
 
 def build_probability_gauge(up_prob: float, dn_prob: float) -> go.Figure:
-    """Gauge showing weekly directional probability."""
+    """Gauge showing directional probability for the signal horizon."""
     fig = go.Figure(go.Indicator(
         mode  = "gauge+number+delta",
         value = up_prob * 100,
-        title = {"text": "UP Probability % (Weekly)", "font": {"color": "white"}},
+        title = {"text": "UP Probability %", "font": {"color": "white"}},
         delta = {"reference": 50, "valueformat": ".1f"},
         gauge = {
             "axis"   : {"range": [0, 100], "tickcolor": "white"},
@@ -235,21 +265,22 @@ def build_probability_gauge(up_prob: float, dn_prob: float) -> go.Figure:
 
 def build_weekly_signal_card(signal: dict) -> go.Figure:
     """
-    Single weekly signal summary bar.
+    Single signal summary bar spanning the model's prediction horizon.
     Replaces the misleading 5-identical-bars chart.
-    Shows one honest probability bar for the week.
+    Shows one honest probability bar for the horizon window.
     """
-    signal_dir = signal["signal"]
-    up_prob    = signal["up_probability"]
-    dn_prob    = signal["dn_probability"]
-    color_up   = "#00ff88"
-    color_dn   = "#ff4444"
+    signal_dir   = signal["signal"]
+    up_prob      = signal["up_probability"]
+    dn_prob      = signal["dn_probability"]
+    color_up     = "#00ff88"
+    color_dn     = "#ff4444"
+    period_label = _forecast_period_label(signal)
 
     fig = go.Figure()
 
     # UP probability bar
     fig.add_trace(go.Bar(
-        x            = ["Week of May 26–30"],
+        x            = [period_label],
         y            = [up_prob * 100],
         name         = "UP %",
         marker_color = color_up,
@@ -260,7 +291,7 @@ def build_weekly_signal_card(signal: dict) -> go.Figure:
 
     # DOWN probability bar
     fig.add_trace(go.Bar(
-        x            = ["Week of May 26–30"],
+        x            = [period_label],
         y            = [dn_prob * 100],
         name         = "DOWN %",
         marker_color = color_dn,
@@ -278,7 +309,7 @@ def build_weekly_signal_card(signal: dict) -> go.Figure:
 
     fig.update_layout(
         template      = "plotly_dark",
-        title         = "Weekly Directional Probability — Single Signal",
+        title         = "Directional Probability — Single Signal",
         barmode       = "group",
         height        = 320,
         paper_bgcolor = "#0e1117",
@@ -325,20 +356,36 @@ def main():
             📈 Forex ML Signal Dashboard
         </h1>
         <p style='text-align:center; color:#888;'>
-            EUR/USD · LightGBM + Macro Features · Weekly Directional Signal
+            EUR/USD · ML-Powered Macro Features · Directional Signal
         </p>
         <hr style='border-color:#2d2d44;'>
     """, unsafe_allow_html=True)
+
+    # Wake up Render free tier if sleeping
+    with st.spinner("Connecting to signal server... (may take 30-60s on first load)"):
+        wake_up_api()
+
+    # Fetch signal first — sidebar below needs it for live model/precision info
+    signal = fetch_signal()
+
+    if signal is None:
+        st.error("Could not load data. Make sure the API is running.")
+        st.stop()
 
     with st.sidebar:
         st.markdown("### ⚙️ Settings")
         chart_days = st.slider("Chart history (days)", 30, 365, 120)
         st.markdown("---")
         st.markdown("### 📊 Model Info")
-        st.markdown("**Model:** LightGBM + Optuna")
+        model_name       = signal.get("model_used", "Unknown")
+        precision        = signal.get("precision_at_threshold")
+        proba_threshold  = signal.get("proba_threshold", 0.65)
+        precision_text   = f"{precision*100:.2f}%" if precision is not None else "N/A"
+        horizon_days     = signal.get("horizon_days", 2)
+        st.markdown(f"**Model:** {model_name}")
         st.markdown("**Features:** 52 (technical + macro)")
-        st.markdown("**Backtest Accuracy:** 61.65%")
-        st.markdown("**Signal frequency:** Weekly (Monday)")
+        st.markdown(f"**Precision (proba ≥ {proba_threshold:.2f}):** {precision_text}")
+        st.markdown(f"**Signal frequency:** Every {horizon_days} trading day(s)")
         st.markdown("---")
         st.markdown("### 📖 How To Use")
         st.markdown(
@@ -359,27 +406,24 @@ def main():
             st.cache_data.clear()
             st.rerun()
 
-    # Wake up Render free tier if sleeping
-    with st.spinner("Connecting to signal server... (may take 30-60s on first load)"):
-        wake_up_api()
-
-    # Fetch data
-    signal     = fetch_signal()
+    # Fetch remaining data
     history_df = fetch_history(chart_days)
     importance = fetch_importance()
 
-    if signal is None or history_df is None:
-        st.error("Could not load data. Make sure the API is running.")
+    if history_df is None:
+        st.error("Could not load history data. Make sure the API is running.")
         st.stop()
 
-    signal_dir = signal["signal"]
-    up_prob    = signal["up_probability"]
-    dn_prob    = signal["dn_probability"]
-    confidence = signal["confidence"]
-    price      = signal["current_price"]
-    as_of      = signal["as_of_date"]
-    color      = "#00ff88" if signal_dir == "UP" else "#ff4444"
-    arrow      = "▲" if signal_dir == "UP" else "▼"
+    signal_dir   = signal["signal"]
+    up_prob      = signal["up_probability"]
+    dn_prob      = signal["dn_probability"]
+    confidence   = signal["confidence"]
+    price        = signal["current_price"]
+    as_of        = signal["as_of_date"]
+    horizon_days = signal.get("horizon_days", 2)
+    period_label = _forecast_period_label(signal)
+    color        = "#00ff88" if signal_dir == "UP" else "#ff4444"
+    arrow        = "▲" if signal_dir == "UP" else "▼"
 
     # Signal banner
     st.markdown(f"""
@@ -393,11 +437,11 @@ def main():
         </span>
         <br><br>
         <span style='color:#aaa; font-size:1em;'>
-            EUR/USD @ {price:.5f} · Signal as of {as_of} · Valid for week of May 26–30
+            EUR/USD @ {price:.5f} · Signal as of {as_of} · Valid for {period_label}
         </span>
         <br>
         <span style='color:#666; font-size:0.85em;'>
-            ⓘ Single weekly signal — not 5 independent daily forecasts
+            ⓘ Single {horizon_days}-day signal — not independent daily forecasts
         </span>
     </div>
     """, unsafe_allow_html=True)
@@ -405,9 +449,9 @@ def main():
     # Metrics row
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
-        st.metric("Price (May 22)",  f"{price:.5f}")
+        st.metric(f"Price ({as_of})",  f"{price:.5f}")
     with col2:
-        st.metric("Weekly Signal",   signal_dir)
+        st.metric(f"{horizon_days}-Day Signal", signal_dir)
     with col3:
         st.metric("UP Probability",  f"{up_prob*100:.1f}%")
     with col4:
@@ -460,7 +504,7 @@ def main():
     <p style='text-align:center; color:#555; font-size:0.8em;'>
         Last updated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} ·
         Model: {signal['model_used']} ·
-        Accuracy: 61.65% · Signal frequency: Weekly
+        Precision (≥{proba_threshold:.2f}): {precision_text} · Signal frequency: Every {horizon_days} trading day(s)
     </p>
     """, unsafe_allow_html=True)
 
