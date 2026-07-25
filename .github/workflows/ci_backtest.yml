@@ -31,7 +31,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest==8.2.0 httpx==0.27.0
-          pip install xgboost==2.0.3 catboost==1.2.5
+          pip install xgboost==2.0.3
 
       - name: Download market data
         run: python src/ingestion.py
@@ -73,7 +73,7 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add models/
+          git add -A -f models/
           git diff --staged --quiet || git commit -m "chore: auto-update production model [skip ci]"
           git push
         env:
