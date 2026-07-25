@@ -17,6 +17,8 @@ sys.path.insert(0, ".")
 
 logger = logging.getLogger(__name__)
 
+PROBA_THRESHOLD = 0.65
+
 
 def load_config(config_path: str = "config.yaml") -> dict:
     with open(config_path, "r") as f:
@@ -27,26 +29,28 @@ def load_model(config: dict):
     """
     Load production model — whichever won the last training run.
     Reads production_model_name.txt to know which model won.
-    Falls back to lgbm_model.joblib for backward compatibility.
+    Falls back to xgb_model.joblib (train.py's saved alias) since
+    XGBoost is now the only model trained.
     """
     model_path    = Path(config["model"]["model_path"])
     cols_path     = model_path / "feature_cols.joblib"
     name_path     = model_path / "production_model_name.txt"
     prod_path     = model_path / "production_model.joblib"
+    xgb_path      = model_path / "xgb_model.joblib"
 
     # Read winner name
     if name_path.exists():
         with open(name_path) as f:
             model_name = f.read().strip()
     else:
-        model_name = "LightGBM"
+        model_name = "XGBoost"
 
     # Load production model
     if prod_path.exists():
         model = joblib.load(prod_path)
-    elif (model_path / "lgbm_model.joblib").exists():
-        model      = joblib.load(model_path / "lgbm_model.joblib")
-        model_name = "LightGBM"
+    elif xgb_path.exists():
+        model      = joblib.load(xgb_path)
+        model_name = "XGBoost"
     else:
         raise FileNotFoundError("No trained model found. Run src/train.py first.")
 
@@ -133,28 +137,26 @@ def generate_signal(config_path: str = "config.yaml") -> Dict:
 
     # Confidence
     confidence = max(up_probability, dn_probability)
-    if confidence >= 0.65:
+    if confidence >= PROBA_THRESHOLD:
         confidence_label = "HIGH"
     elif confidence >= 0.55:
         confidence_label = "MEDIUM"
     else:
         confidence_label = "LOW"
 
-    # 5-day forecast
-    horizon          = config["features"]["target_horizon"]
-    feature_window   = df[valid_cols].copy()
-    daily_forecasts  = []
-
-    for day in range(1, horizon + 1):
-        row       = feature_window.iloc[-1:]
-        day_pred  = int(model.predict(row)[0])
-        day_proba = model.predict_proba(row)[0]
-        daily_forecasts.append({
-            "day":       day,
-            "direction": "UP" if day_pred == 1 else "DOWN",
-            "up_prob":   float(round(day_proba[1], 4)),
-            "dn_prob":   float(round(day_proba[0], 4)),
-        })
+    # Single forecast for the full horizon.
+    # NOTE: the model predicts ONE target — price direction `horizon`
+    # trading days out from today. It does not produce independent
+    # day-1, day-2, ... day-N signals (that would need separate models
+    # trained on separate horizons), so we report the one real
+    # prediction the model makes instead of a fabricated per-day list.
+    horizon = config["features"]["target_horizon"]
+    forecast = {
+        "horizon_days": horizon,
+        "direction":    direction_label,
+        "up_prob":      up_probability,
+        "dn_prob":      dn_probability,
+    }
 
     return {
         "symbol":          config["data"]["symbol"],
@@ -165,7 +167,7 @@ def generate_signal(config_path: str = "config.yaml") -> Dict:
         "dn_probability":  dn_probability,
         "confidence":      confidence_label,
         "horizon_days":    horizon,
-        "daily_forecasts": daily_forecasts,
+        "forecast":        forecast,
         "model_used":      model_name,
     }
 
