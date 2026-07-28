@@ -2,7 +2,7 @@ name: CI — Refresh Data & Signal (No Retrain)
 
 on:
   schedule:
-    - cron: "30 23 * * 1-5" # Weekdays, 11:30PM UTC — after forex close (~22:00 UTC / 5PM NY)
+    - cron: "30 22 * * 1-5" # Weekdays, 11:30PM UTC — after forex close (~22:00 UTC / 5PM NY)
   workflow_dispatch: {}     # allows manual trigger from the Actions tab
 
 jobs:
