@@ -3,18 +3,18 @@
   "as_of_date": "2026-07-28",
   "current_price": 1.1369450092315674,
   "signal": "UP",
-  "up_probability": 0.5219,
-  "dn_probability": 0.4781,
-  "confidence": "LOW",
+  "up_probability": 0.5955,
+  "dn_probability": 0.4045,
+  "confidence": "MEDIUM",
   "horizon_days": 2,
   "forecast": {
     "horizon_days": 2,
     "direction": "UP",
-    "up_prob": 0.5219,
-    "dn_prob": 0.4781
+    "up_prob": 0.5955,
+    "dn_prob": 0.4045
   },
   "model_used": "XGBoost",
-  "locked_at": "2026-07-29T00:25:45.300217",
+  "locked_at": "2026-07-29T00:35:38.050500",
   "valid_from": "2026-07-29",
   "valid_until": "2026-07-30"
 }
