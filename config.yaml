@@ -5,7 +5,7 @@ project:
 data:
   symbol: "EURUSD=X"
   interval: "1wk"
-  start_date: "2001-01-01"
+  start_date: "2018-01-01"
   end_date: "2026-05-20"
   raw_path: "data/raw"
   features_path: "data/features"
