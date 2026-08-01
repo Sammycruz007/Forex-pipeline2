@@ -2,8 +2,7 @@
 
 > **A production-grade algorithmic trading signal system for EUR/USD.**
 > Combines macroeconomic features with a calibrated XGBoost classifier to predict
-> 2-day directional bias. Signals are issued every Sunday evening, locked for the
-> trading week, and served live via FastAPI and a Streamlit dashboard.
+> 2-day directional bias. Signals are issued every day and served live via FastAPI and a Streamlit dashboard.
 
 ---
 
