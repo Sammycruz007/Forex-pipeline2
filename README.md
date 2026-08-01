@@ -11,7 +11,7 @@
 
 | Service | URL |
 |---|---|
-| 📊 Dashboard | *(paste Streamlit Cloud URL here)* |
+| 📊 Dashboard |https://forex-pipeline2.streamlit.app/|
 | ⚡ Signal API | `https://forex-signal-api-28dg.onrender.com` |
 | 📖 API Docs | `https://forex-signal-api-28dg.onrender.com/docs` |
 
@@ -19,8 +19,9 @@
 
 ## Dashboard Preview
 
-*(paste dashboard screenshot or GIF here)*
+![alt text](image.png)
 
+![alt text](image-1.png)
 ---
 
 ## Table of Contents
@@ -184,8 +185,7 @@ Three boosting models were evaluated head-to-head on identical data:
 | Model | Accuracy | Precision @0.65 |
 |---|---|---|
 | XGBoost | **63.44%** | **86.25%** |
-| LightGBM | 61.02% | — |
-| CatBoost | 59.81% | — |
+
 
 XGBoost's exact greedy split algorithm outperforms histogram approximation
 at our dataset size (~1,600 training rows). At 10,000+ rows LightGBM would
@@ -250,15 +250,6 @@ target label yet and are never used in training or evaluation.
 47 features across 5 categories. All computed from daily OHLCV data.
 Feature store saved as Parquet at `data/features/EURUSD_X_features.parquet`.
 
-### Technical Features (35)
-
-| Category | Features |
-|---|---|
-| Trend | SMA(10/20/50), EMA(10), price_vs_sma20/50, MACD signal + histogram, ADX |
-| Momentum | RSI(14), Stochastic %K/%D, ROC(5/10) |
-| Volatility | Bollinger Bands (upper/lower/middle/width/position), ATR(14) |
-| Lag / Returns | return_lag(2/3/5/10), HL range, volatility_10/20 |
-| Regime | above_sma20/50 flags (pruned — zero importance removed in V2) |
 
 ### Macro Features (12)
 
