@@ -1,20 +1,20 @@
 {
   "symbol": "EURUSD=X",
-  "as_of_date": "2026-09-01",
-  "current_price": 1.1617640256881714,
+  "as_of_date": "2026-09-02",
+  "current_price": 1.1595547199249268,
   "signal": "DOWN",
-  "up_probability": 0.1999,
-  "dn_probability": 0.8001,
-  "confidence": "HIGH",
+  "up_probability": 0.4547,
+  "dn_probability": 0.5453,
+  "confidence": "LOW",
   "horizon_days": 2,
   "forecast": {
     "horizon_days": 2,
     "direction": "DOWN",
-    "up_prob": 0.1999,
-    "dn_prob": 0.8001
+    "up_prob": 0.4547,
+    "dn_prob": 0.5453
   },
   "model_used": "XGBoost",
-  "locked_at": "2026-09-02T06:13:58.932664",
-  "valid_from": "2026-09-02",
-  "valid_until": "2026-09-03"
+  "locked_at": "2026-09-04T06:20:05.602825",
+  "valid_from": "2026-09-04",
+  "valid_until": "2026-09-07"
 }
