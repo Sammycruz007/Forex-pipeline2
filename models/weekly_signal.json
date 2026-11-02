@@ -14,7 +14,7 @@
     "dn_prob": 0.2193
   },
   "model_used": "XGBoost",
-  "locked_at": "2026-11-01T21:31:24.218616",
-  "valid_from": "2026-11-01",
+  "locked_at": "2026-11-02T08:00:03.572171",
+  "valid_from": "2026-11-02",
   "valid_until": "2026-11-03"
 }
