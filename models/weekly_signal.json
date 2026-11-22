@@ -1,20 +1,20 @@
 {
   "symbol": "EURUSD=X",
-  "as_of_date": "2026-11-19",
-  "current_price": 1.0972011089324951,
-  "signal": "DOWN",
-  "up_probability": 0.4727,
-  "dn_probability": 0.5273,
-  "confidence": "LOW",
+  "as_of_date": "2026-11-20",
+  "current_price": 1.0969723463058472,
+  "signal": "UP",
+  "up_probability": 0.6453,
+  "dn_probability": 0.3547,
+  "confidence": "MEDIUM",
   "horizon_days": 2,
   "forecast": {
     "horizon_days": 2,
-    "direction": "DOWN",
-    "up_prob": 0.4727,
-    "dn_prob": 0.5273
+    "direction": "UP",
+    "up_prob": 0.6453,
+    "dn_prob": 0.3547
   },
   "model_used": "XGBoost",
-  "locked_at": "2026-11-20T08:56:23.406729",
-  "valid_from": "2026-11-20",
-  "valid_until": "2026-11-23"
+  "locked_at": "2026-11-22T23:00:48.600551",
+  "valid_from": "2026-11-22",
+  "valid_until": "2026-11-24"
 }
